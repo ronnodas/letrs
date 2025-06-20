@@ -73,7 +73,7 @@ impl Header {
         let Ok(hardblank) = hardblank.chars().exactly_one() else {
             return Err(HeaderError::Hardblank(hardblank.to_owned()));
         };
-        let hardblank = Hardblank::from_char(hardblank)?;
+        let hardblank = hardblank.try_into()?;
         let height = height.parse()?;
         let baseline = match baseline.parse() {
             Ok(baseline) => baseline,
@@ -122,9 +122,15 @@ impl Header {
 
 struct Hardblank(char);
 
-impl Hardblank {
-    fn from_char(hardblank: char) -> Result<Self, char> {
-        todo!()
+impl TryFrom<char> for Hardblank {
+    type Error = char;
+
+    fn try_from(value: char) -> Result<Self, Self::Error> {
+        if matches!(value, ' ' | '\r' | '\n' | '\0') {
+            Err(value)
+        } else {
+            Ok(Self(value))
+        }
     }
 }
 
