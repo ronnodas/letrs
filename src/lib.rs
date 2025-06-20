@@ -202,11 +202,7 @@ impl Header {
         let full_layout = full_layout.map(|x| x.parse()).transpose()?;
         let horizontal_layout = HorizontalLayout::parse(old_layout, full_layout)?;
         let vertical_layout = VerticalLayout::parse(full_layout)?;
-        let print_direction = match print_direction {
-            None | Some("0") => PrintDirection::LeftToRight,
-            Some("1") => PrintDirection::RightToLeft,
-            Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
-        };
+        let print_direction = PrintDirection::parse(print_direction)?;
         let codetag_count = codetag_count.map(|x| x.parse()).transpose()?.unwrap_or(0);
         let header = Self {
             hardblank,
@@ -280,6 +276,16 @@ impl Character {
 pub enum PrintDirection {
     LeftToRight,
     RightToLeft,
+}
+
+impl PrintDirection {
+    fn parse(print_direction: Option<&str>) -> Result<PrintDirection, HeaderError> {
+        Ok(match print_direction {
+            None | Some("0") => PrintDirection::LeftToRight,
+            Some("1") => PrintDirection::RightToLeft,
+            Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
+        })
+    }
 }
 
 #[derive(Debug, Error)]
