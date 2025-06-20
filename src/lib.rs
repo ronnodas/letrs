@@ -32,8 +32,7 @@ impl Font {
         let Some(header_line) = lines.next() else {
             return Err(Error::BadHeader(HeaderError::Missing));
         };
-        let (header, header_warnings) = Header::parse(header_line)?;
-        warnings.extend(header_warnings);
+        let header = Header::parse(header_line, &mut warnings)?;
         todo!()
     }
 }
@@ -51,8 +50,7 @@ struct Header {
 }
 
 impl Header {
-    fn parse(header_line: &str) -> Result<(Self, Vec<Warning>), HeaderError> {
-        let mut warnings = Vec::new();
+    fn parse(header_line: &str, warnings: &mut Vec<Warning>) -> Result<Self, HeaderError> {
         let mut parameters = header_line
             .split(' ')
             .filter(|parameter| !parameter.is_empty());
@@ -116,7 +114,7 @@ impl Header {
             print_direction,
             codetag_count,
         };
-        Ok((header, warnings))
+        Ok(header)
     }
 }
 
