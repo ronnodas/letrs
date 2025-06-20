@@ -19,14 +19,14 @@ impl HorizontalLayout {
             let [_, low] = full_layout.to_be_bytes();
             let default_mode = LayoutMode::parse(low >> 6).expect("u8 >> 6 is in 0..=3");
             match (old_layout, default_mode) {
-                (-1, LayoutMode::FullWidth) => (),
-                (0, LayoutMode::Fitting) => (),
-                (0..=63, LayoutMode::Smushing) => (),
+                (0..=63, LayoutMode::Smushing)
+                | (0, LayoutMode::Fitting)
+                | (-1, LayoutMode::FullWidth) => (),
                 (-1..=63, _) => {
                     return Err(LayoutParseError::Inconsistent(old_layout, full_layout));
                 }
                 _ => return Err(LayoutParseError::InvalidOld(old_layout)),
-            };
+            }
             let smushing =
                 if old_layout >= 0 && u16::from(old_layout.cast_unsigned()) == full_layout & 63 {
                     HorizontalSmushing::parse(old_layout.cast_unsigned())
@@ -83,7 +83,7 @@ pub enum LayoutMode {
 }
 
 impl LayoutMode {
-    fn parse(two_bits: u8) -> Option<Self> {
+    const fn parse(two_bits: u8) -> Option<Self> {
         match two_bits {
             0 => Some(Self::FullWidth),
             1 => Some(Self::Fitting),
@@ -105,7 +105,7 @@ pub enum HorizontalSmushing {
 }
 
 impl HorizontalSmushing {
-    fn parse(old_layout: u8) -> EnumSet<HorizontalSmushing> {
+    fn parse(old_layout: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(old_layout)
     }
 }
@@ -121,7 +121,7 @@ pub enum VerticalSmushing {
 }
 
 impl VerticalSmushing {
-    fn parse(high: u8) -> EnumSet<VerticalSmushing> {
+    fn parse(high: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(high)
     }
 }

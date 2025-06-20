@@ -4,7 +4,7 @@ mod str_ext;
 use std::collections::HashMap;
 use std::num::ParseIntError;
 
-use itertools::Itertools;
+use itertools::Itertools as _;
 use thiserror::Error;
 
 use layout::{HorizontalLayout, LayoutParseError, VerticalLayout};
@@ -31,19 +31,19 @@ pub struct Font {
 impl Font {
     const STANDARD: &'static str = include_str!("standard.flf");
 
-    pub fn parse(font: &str) -> Result<Self, Error> {
+    pub fn parse(font: &str) -> Result<Self, FigError> {
         Self::parse_strict(font).map(|(font, _)| font)
     }
 
-    pub fn parse_strict(font_string: &str) -> Result<(Self, Vec<Warning>), Error> {
+    pub fn parse_strict(font_string: &str) -> Result<(Self, Vec<Warning>), FigError> {
         let mut warnings = Vec::new();
         if !font_string.is_ascii() {
             warnings.push(Warning::NonAscii);
         }
-        let font_string = font_string.replace("\r\n", "\n").replace("\r", "\n");
+        let font_string = font_string.replace("\r\n", "\n").replace('\r', "\n");
         let mut lines = font_string.lines();
         let Some(header_line) = lines.next() else {
-            return Err(Error::BadHeader(HeaderError::Missing));
+            return Err(FigError::BadHeader(HeaderError::Missing));
         };
         let header = Header::parse(header_line, &mut warnings)?;
         let comments = lines.by_ref().take(header.comment_lines).join("\n");
@@ -62,7 +62,7 @@ impl Font {
         &mut self,
         mut lines: impl Iterator<Item = &'a str>,
         warnings: &mut Vec<Warning>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), FigError> {
         let default_char_chunks = lines
             .by_ref()
             .take(DEFAULT_CODEPOINTS.len() * self.header.height)
@@ -72,12 +72,13 @@ impl Font {
             .zip(default_char_chunks.into_iter())
         {
             let character = Character::parse(rows, codepoint, &self.header, warnings)?;
-            _ = self.characters.insert(codepoint, character);
+            drop(self.characters.insert(codepoint, character));
         }
         if self.characters.len() != DEFAULT_CODEPOINTS.len() {
-            return Err(Error::MissingDefaultCharacters(self.characters.len()));
+            return Err(FigError::MissingDefaultCharacters(self.characters.len()));
         }
-        for mut rows in lines.by_ref().chunks(self.header.height + 1).into_iter() {
+        let mut processed_chars = 0;
+        for mut rows in &lines.by_ref().chunks(self.header.height + 1) {
             let line = rows.next().expect("chunk size >= 1");
             let (codepoint, desc) = line
                 .split_once(' ')
@@ -87,29 +88,31 @@ impl Font {
             let (codepoint, positive) = Self::parse_codepoint(codepoint)?;
             if positive {
                 if let Some(desc) = desc {
-                    self.code_tagged_characters
-                        .insert(codepoint, desc.to_owned());
+                    drop(
+                        self.code_tagged_characters
+                            .insert(codepoint, desc.to_owned()),
+                    );
                 }
                 let character = Character::parse(rows, codepoint, &self.header, warnings)?;
-                self.characters.insert(codepoint, character);
+                drop(self.characters.insert(codepoint, character));
             } else {
-                self.ignored_codepoints.insert(codepoint, rows.join("\n"));
+                drop(self.ignored_codepoints.insert(codepoint, rows.join("\n")));
             }
+            processed_chars += 1;
         }
-        if self.characters.len() + self.ignored_codepoints.len() < 102 + self.header.codetag_count {
+        if processed_chars < self.header.codetag_count {
             warnings.push(Warning::TooFewCodetags {
-                found: self.characters.len() + self.ignored_codepoints.len() - 102,
+                found: processed_chars,
                 expected: self.header.codetag_count,
             });
         }
         Ok(())
     }
 
-    fn parse_codepoint(codepoint: &str) -> Result<(u32, bool), Error> {
-        let (positive, codepoint) = match codepoint.strip_prefix('-') {
-            Some(codepoint) => (false, codepoint),
-            None => (true, codepoint),
-        };
+    fn parse_codepoint(codepoint: &str) -> Result<(u32, bool), FigError> {
+        let (positive, codepoint) = codepoint
+            .strip_prefix('-')
+            .map_or((true, codepoint), |codepoint| (false, codepoint));
         let codepoint = if let Some(codepoint) = codepoint.strip_prefix("0x") {
             u32::from_str_radix(codepoint, 16)
         } else if let Some(codepoint) = codepoint.strip_prefix("0") {
@@ -117,22 +120,25 @@ impl Font {
         } else {
             codepoint.parse()
         };
-        let codepoint = codepoint.map_err(Error::InvalidCodePoint)?;
-        if (positive && codepoint <= 2147483647) || (!positive && codepoint <= 2147483648) {
+        let codepoint = codepoint.map_err(FigError::InvalidCodePoint)?;
+        if (positive && codepoint <= 0x7FFF_FFFF) || (!positive && codepoint <= 0x8000_0000) {
             Ok((codepoint, positive))
         } else {
-            Err(Error::CodePointOutOfRange(codepoint))
+            Err(FigError::CodePointOutOfRange(codepoint))
         }
     }
 
+    #[must_use]
     pub fn comments(&self) -> &str {
         &self.comments
     }
 
-    pub fn header(&self) -> &Header {
+    #[must_use]
+    pub const fn header(&self) -> &Header {
         &self.header
     }
 
+    #[must_use]
     pub fn standard() -> Self {
         Self::parse(Self::STANDARD).expect("Should be tested")
     }
@@ -145,8 +151,8 @@ pub struct Header {
     pub baseline: usize,
     pub max_length: usize,
     pub comment_lines: usize,
-    pub horizontal_layout: layout::HorizontalLayout,
-    pub vertical_layout: layout::VerticalLayout,
+    pub horizontal_layout: HorizontalLayout,
+    pub vertical_layout: VerticalLayout,
     pub print_direction: PrintDirection,
     pub codetag_count: usize,
 }
@@ -181,29 +187,28 @@ impl Header {
         let Ok(hardblank) = hardblank.chars().exactly_one() else {
             return Err(HeaderError::Hardblank(hardblank.to_owned()));
         };
-        let hardblank = hardblank.try_into()?;
+        let hardblank = hardblank
+            .try_into()
+            .map_err(HeaderError::InvalidHardblankChar)?;
         let height = height.parse()?;
         if height == 0 {
             return Err(HeaderError::ZeroHeight);
         }
-        let baseline = match baseline.parse() {
-            Ok(baseline) => baseline,
-            Err(_) => {
-                warnings.push(Warning::Baseline(baseline.to_owned()));
-                1
-            }
-        };
+        let baseline = baseline.parse().unwrap_or_else(|_| {
+            warnings.push(Warning::Baseline(baseline.to_owned()));
+            1
+        });
         if !(0 < baseline && baseline <= height) {
-            warnings.push(Warning::BaselineOutOfRange(baseline))
+            warnings.push(Warning::BaselineOutOfRange(baseline));
         }
         let max_length = max_length.parse()?;
         let comment_lines = comment_lines.parse()?;
         let old_layout = old_layout.parse()?;
-        let full_layout = full_layout.map(|x| x.parse()).transpose()?;
+        let full_layout = full_layout.map(str::parse).transpose()?;
         let horizontal_layout = HorizontalLayout::parse(old_layout, full_layout)?;
         let vertical_layout = VerticalLayout::parse(full_layout)?;
         let print_direction = PrintDirection::parse(print_direction)?;
-        let codetag_count = codetag_count.map(|x| x.parse()).transpose()?.unwrap_or(0);
+        let codetag_count = codetag_count.map(str::parse).transpose()?.unwrap_or(0);
         let header = Self {
             hardblank,
             height,
@@ -246,15 +251,15 @@ impl Character {
         codepoint: u32,
         header: &Header,
         warnings: &mut Vec<Warning>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, FigError> {
         let rows = rows
             .map(|line| {
                 let last = line.last()?;
                 Some(line.trim_end_matches(last).to_owned())
             })
             .collect::<Option<Vec<String>>>()
-            .ok_or(Error::EmptyRow(codepoint))?;
-        let width = match rows.iter().map(|row| row.len()).unique().exactly_one() {
+            .ok_or(FigError::EmptyRow(codepoint))?;
+        let width = match rows.iter().map(String::len).unique().exactly_one() {
             Ok(width) => width,
             Err(widths) => {
                 warnings.push(Warning::InconsistentWidth(codepoint));
@@ -266,7 +271,7 @@ impl Character {
                 codepoint,
                 width,
                 max_length: header.max_length,
-            })
+            });
         }
         Ok(Self { width, rows })
     }
@@ -279,17 +284,17 @@ pub enum PrintDirection {
 }
 
 impl PrintDirection {
-    fn parse(print_direction: Option<&str>) -> Result<PrintDirection, HeaderError> {
+    fn parse(print_direction: Option<&str>) -> Result<Self, HeaderError> {
         Ok(match print_direction {
-            None | Some("0") => PrintDirection::LeftToRight,
-            Some("1") => PrintDirection::RightToLeft,
+            None | Some("0") => Self::LeftToRight,
+            Some("1") => Self::RightToLeft,
             Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
         })
     }
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum FigError {
     #[error("Bad header: {0}")]
     BadHeader(#[from] HeaderError),
     #[error("Not enough required FIGcharacters, found {0}, expected 102")]
@@ -324,12 +329,7 @@ pub enum HeaderError {
     ZeroHeight,
 }
 
-impl From<char> for HeaderError {
-    fn from(value: char) -> Self {
-        Self::InvalidHardblankChar(value)
-    }
-}
-
+#[derive(Debug)]
 pub enum Warning {
     NonAscii,
     Baseline(String),
@@ -353,6 +353,6 @@ mod tests {
     #[test]
     fn parse_standard() {
         let (_font, warnings) = Font::parse_strict(Font::STANDARD).unwrap();
-        assert!(warnings.is_empty())
+        assert!(warnings.is_empty());
     }
 }
