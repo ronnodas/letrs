@@ -1,8 +1,12 @@
+pub mod layout;
+
 use std::collections::HashMap;
 use std::num::ParseIntError;
 
 use itertools::Itertools;
 use thiserror::Error;
+
+use layout::{HorizontalLayout, LayoutParseError, VerticalLayout};
 
 pub struct Font {
     header: Header,
@@ -40,8 +44,8 @@ struct Header {
     baseline: usize,
     max_length: usize,
     comment_lines: usize,
-    horizontal_layout: HorizontalLayout,
-    vertical_layout: VerticalLayout,
+    horizontal_layout: layout::HorizontalLayout,
+    vertical_layout: layout::VerticalLayout,
     print_direction: PrintDirection,
     codetag_count: usize,
 }
@@ -65,6 +69,10 @@ impl Header {
         else {
             return Err(HeaderError::NotEnoughParameters(header_line.to_owned()));
         };
+        let print_direction = parameters.next();
+        let full_layout = parameters.next();
+        let codetag_count = parameters.next();
+
         let Some(hardblank) = signature_and_hardblank.strip_prefix("flf2a") else {
             return Err(HeaderError::UnknownSignature(
                 signature_and_hardblank.to_owned(),
@@ -87,17 +95,16 @@ impl Header {
         }
         let max_length = max_length.parse()?;
         let comment_lines = comment_lines.parse()?;
-        let full_layout = parameters.next();
-        let (horizontal_layout, vertical_layout) = Self::parse_layouts(old_layout, full_layout)?;
-        let print_direction = match parameters.next() {
+        let old_layout = old_layout.parse()?;
+        let full_layout = full_layout.map(|x| x.parse()).transpose()?;
+        let horizontal_layout = HorizontalLayout::parse(old_layout, full_layout)?;
+        let vertical_layout = VerticalLayout::parse(full_layout)?;
+        let print_direction = match print_direction {
             None | Some("0") => PrintDirection::LeftToRight,
             Some("1") => PrintDirection::RightToLeft,
             Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
         };
-        let codetag_count = match parameters.next() {
-            Some(count) => count.parse()?,
-            None => 0,
-        };
+        let codetag_count = codetag_count.map(|x| x.parse()).transpose()?.unwrap_or(0);
         let header = Self {
             hardblank,
             height,
@@ -110,13 +117,6 @@ impl Header {
             codetag_count,
         };
         Ok((header, warnings))
-    }
-
-    fn parse_layouts(
-        old_layout: &str,
-        full_layout: Option<&str>,
-    ) -> Result<(HorizontalLayout, VerticalLayout), HeaderError> {
-        todo!()
     }
 }
 
@@ -135,10 +135,6 @@ impl TryFrom<char> for Hardblank {
 }
 
 struct Character {}
-
-enum HorizontalLayout {}
-
-enum VerticalLayout {}
 
 enum PrintDirection {
     LeftToRight,
@@ -167,6 +163,8 @@ pub enum HeaderError {
     ParseInt(#[from] ParseIntError),
     #[error(r#""{0}" is an invalid print direction, expecting 0 or 1"#)]
     PrintDirection(String),
+    #[error("{0}")]
+    Layout(#[from] LayoutParseError),
 }
 
 impl From<char> for HeaderError {
