@@ -99,7 +99,23 @@ impl Font {
     }
 
     fn parse_codepoint(codepoint: &str) -> Result<(u32, bool), Error> {
-        todo!()
+        let (positive, codepoint) = match codepoint.strip_prefix('-') {
+            Some(codepoint) => (false, codepoint),
+            None => (true, codepoint),
+        };
+        let codepoint = if let Some(codepoint) = codepoint.strip_prefix("0x") {
+            u32::from_str_radix(codepoint, 16)
+        } else if let Some(codepoint) = codepoint.strip_prefix("0") {
+            u32::from_str_radix(codepoint, 8)
+        } else {
+            codepoint.parse()
+        };
+        let codepoint = codepoint.map_err(Error::InvalidCodePoint)?;
+        if (positive && codepoint <= 2147483647) || (!positive && codepoint <= 2147483648) {
+            Ok((codepoint, positive))
+        } else {
+            Err(Error::CodePointOutOfRange(codepoint))
+        }
     }
 
     pub fn comments(&self) -> &str {
@@ -212,7 +228,10 @@ impl TryFrom<char> for Hardblank {
     }
 }
 
-struct Character {}
+struct Character {
+    rows: Vec<String>,
+}
+
 impl Character {
     fn parse<'a>(
         lines: impl Iterator<Item = &'a str>,
@@ -235,6 +254,10 @@ pub enum Error {
     BadHeader(#[from] HeaderError),
     #[error("Not enough required FIGcharacters, found {0}, expected 102")]
     MissingDefaultCharacters(usize),
+    #[error("{0}")]
+    InvalidCodePoint(ParseIntError),
+    #[error("{0}")]
+    CodePointOutOfRange(u32),
 }
 
 #[derive(Debug, Error)]
