@@ -4,7 +4,7 @@ use thiserror::Error;
 pub type HorizontalLayout = Layout<HorizontalSmushing>;
 pub type VerticalLayout = Layout<VerticalSmushing>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Layout<S: EnumSetType> {
     default_mode: LayoutMode,
     smushing: EnumSet<S>,
@@ -75,7 +75,7 @@ impl VerticalLayout {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum LayoutMode {
     FullWidth,
     Fitting,
@@ -93,7 +93,7 @@ impl LayoutMode {
     }
 }
 
-#[derive(EnumSetType)]
+#[derive(EnumSetType, Debug)]
 #[enumset(repr = "u8")]
 pub enum HorizontalSmushing {
     EqualCharacter = 0,
@@ -110,7 +110,7 @@ impl HorizontalSmushing {
     }
 }
 
-#[derive(EnumSetType)]
+#[derive(EnumSetType, Debug)]
 #[enumset(repr = "u8")]
 pub enum VerticalSmushing {
     EqualCharacter = 0,

@@ -1,4 +1,5 @@
 pub mod layout;
+mod str_ext;
 
 use std::collections::HashMap;
 use std::num::ParseIntError;
@@ -8,6 +9,8 @@ use thiserror::Error;
 
 use layout::{HorizontalLayout, LayoutParseError, VerticalLayout};
 
+use crate::str_ext::StrExt as _;
+
 const DEFAULT_CODEPOINTS: [u32; 102] = [
     32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
     56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
@@ -16,6 +19,7 @@ const DEFAULT_CODEPOINTS: [u32; 102] = [
     122, 123, 124, 125, 126, 196, 214, 220, 228, 246, 252, 223,
 ];
 
+#[derive(Debug)]
 pub struct Font {
     header: Header,
     comments: String,
@@ -43,7 +47,6 @@ impl Font {
         };
         let header = Header::parse(header_line, &mut warnings)?;
         let comments = lines.by_ref().take(header.comment_lines).join("\n");
-
         let mut font = Self {
             header,
             comments,
@@ -60,18 +63,22 @@ impl Font {
         mut lines: impl Iterator<Item = &'a str>,
         warnings: &mut Vec<Warning>,
     ) -> Result<(), Error> {
-        for (codepoint, lines) in DEFAULT_CODEPOINTS
+        let default_char_chunks = lines
+            .by_ref()
+            .take(DEFAULT_CODEPOINTS.len() * self.header.height)
+            .chunks(self.header.height);
+        for (codepoint, rows) in DEFAULT_CODEPOINTS
             .into_iter()
-            .zip(lines.by_ref().chunks(self.header.height).into_iter())
+            .zip(default_char_chunks.into_iter())
         {
-            let character = Character::parse(lines, &self.header, warnings)?;
+            let character = Character::parse(rows, codepoint, &self.header, warnings)?;
             _ = self.characters.insert(codepoint, character);
         }
         if self.characters.len() != DEFAULT_CODEPOINTS.len() {
             return Err(Error::MissingDefaultCharacters(self.characters.len()));
         }
-        for mut lines in lines.by_ref().chunks(self.header.height + 1).into_iter() {
-            let line = lines.next().expect("chunk size >= 1");
+        for mut rows in lines.by_ref().chunks(self.header.height + 1).into_iter() {
+            let line = rows.next().expect("chunk size >= 1");
             let (codepoint, desc) = line
                 .split_once(' ')
                 .map_or((line, None), |(codepoint, desc)| {
@@ -83,10 +90,10 @@ impl Font {
                     self.code_tagged_characters
                         .insert(codepoint, desc.to_owned());
                 }
-                let character = Character::parse(lines, &self.header, warnings)?;
+                let character = Character::parse(rows, codepoint, &self.header, warnings)?;
                 self.characters.insert(codepoint, character);
             } else {
-                self.ignored_codepoints.insert(codepoint, lines.join("\n"));
+                self.ignored_codepoints.insert(codepoint, rows.join("\n"));
             }
         }
         if self.characters.len() + self.ignored_codepoints.len() < 102 + self.header.codetag_count {
@@ -131,7 +138,7 @@ impl Font {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Header {
     pub hardblank: Hardblank,
     pub height: usize,
@@ -176,6 +183,9 @@ impl Header {
         };
         let hardblank = hardblank.try_into()?;
         let height = height.parse()?;
+        if height == 0 {
+            return Err(HeaderError::ZeroHeight);
+        }
         let baseline = match baseline.parse() {
             Ok(baseline) => baseline,
             Err(_) => {
@@ -213,7 +223,7 @@ impl Header {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Hardblank(char);
 
 impl TryFrom<char> for Hardblank {
@@ -228,21 +238,45 @@ impl TryFrom<char> for Hardblank {
     }
 }
 
+#[derive(Debug)]
 struct Character {
+    width: usize,
     rows: Vec<String>,
 }
 
 impl Character {
     fn parse<'a>(
-        lines: impl Iterator<Item = &'a str>,
+        rows: impl Iterator<Item = &'a str>,
+        codepoint: u32,
         header: &Header,
         warnings: &mut Vec<Warning>,
     ) -> Result<Self, Error> {
-        todo!()
+        let rows = rows
+            .map(|line| {
+                let last = line.last()?;
+                Some(line.trim_end_matches(last).to_owned())
+            })
+            .collect::<Option<Vec<String>>>()
+            .ok_or(Error::EmptyRow(codepoint))?;
+        let width = match rows.iter().map(|row| row.len()).unique().exactly_one() {
+            Ok(width) => width,
+            Err(widths) => {
+                warnings.push(Warning::InconsistentWidth(codepoint));
+                widths.max().expect("height is non-zero")
+            }
+        };
+        if width > header.max_length {
+            warnings.push(Warning::ExcessLength {
+                codepoint,
+                width,
+                max_length: header.max_length,
+            })
+        }
+        Ok(Self { width, rows })
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum PrintDirection {
     LeftToRight,
     RightToLeft,
@@ -258,19 +292,21 @@ pub enum Error {
     InvalidCodePoint(ParseIntError),
     #[error("{0}")]
     CodePointOutOfRange(u32),
+    #[error("empty row in FIGcharacter {0}")]
+    EmptyRow(u32),
 }
 
 #[derive(Debug, Error)]
 pub enum HeaderError {
-    #[error("Missing header")]
+    #[error("missing header")]
     Missing,
     #[error(r#""{0}" does not include enough parameters"#)]
     NotEnoughParameters(String),
     #[error(r#"{0} does not begin with "flf2a""#)]
     UnknownSignature(String),
-    #[error(r#"hardblank "{0}" should be exactly one character"#)]
+    #[error(r#"hardblank "{0}" is not exactly one character"#)]
     Hardblank(String),
-    #[error("'{0}' may not be the hardblank")]
+    #[error("'{0}' must not be the hardblank")]
     InvalidHardblankChar(char),
     #[error("{0}")]
     ParseInt(#[from] ParseIntError),
@@ -278,6 +314,8 @@ pub enum HeaderError {
     PrintDirection(String),
     #[error("{0}")]
     Layout(#[from] LayoutParseError),
+    #[error("height parameter is 0")]
+    ZeroHeight,
 }
 
 impl From<char> for HeaderError {
@@ -290,17 +328,21 @@ pub enum Warning {
     NonAscii,
     Baseline(String),
     BaselineOutOfRange(usize),
-    TooFewCodetags { found: usize, expected: usize },
+    TooFewCodetags {
+        found: usize,
+        expected: usize,
+    },
+    InconsistentWidth(u32),
+    ExcessLength {
+        codepoint: u32,
+        width: usize,
+        max_length: usize,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use crate::Font;
-
-    #[test]
-    fn null_char() {
-        assert_eq!(u32::from('\0'), 0)
-    }
 
     #[test]
     fn parse_standard() {
