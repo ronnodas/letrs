@@ -1,4 +1,5 @@
 pub mod layout;
+pub mod render;
 mod str_ext;
 
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use thiserror::Error;
 
 use layout::{HorizontalLayout, LayoutParseError, VerticalLayout};
 
+use crate::render::Renderer;
 use crate::str_ext::StrExt as _;
 
 const DEFAULT_CODEPOINTS: [u32; 102] = [
@@ -56,6 +58,11 @@ impl Font {
         };
         font.parse_characters(lines, &mut warnings)?;
         Ok((font, warnings))
+    }
+
+    #[must_use]
+    pub fn render(&self, string: &str) -> String {
+        Renderer::new(self).render(string)
     }
 
     fn parse_characters<'a>(
@@ -142,6 +149,12 @@ impl Font {
     pub fn standard() -> Self {
         Self::parse(Self::STANDARD).expect("Should be tested")
     }
+
+    fn get(&self, char: char) -> Option<&Character> {
+        self.characters
+            .get(&u32::from(char))
+            .or_else(|| self.characters.get(&0))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -226,6 +239,12 @@ impl Header {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Hardblank(char);
+
+impl PartialEq<char> for Hardblank {
+    fn eq(&self, other: &char) -> bool {
+        self.0 == *other
+    }
+}
 
 impl TryFrom<char> for Hardblank {
     type Error = char;

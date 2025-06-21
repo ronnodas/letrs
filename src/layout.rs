@@ -1,6 +1,8 @@
 use enumset::{EnumSet, EnumSetType};
 use thiserror::Error;
 
+use crate::Hardblank;
+
 pub type HorizontalLayout = Layout<HorizontalSmushing>;
 pub type VerticalLayout = Layout<VerticalSmushing>;
 
@@ -21,7 +23,7 @@ impl HorizontalLayout {
             match (old_layout, default_mode) {
                 (0..=63, LayoutMode::Smushing)
                 | (0, LayoutMode::Fitting)
-                | (-1, LayoutMode::FullWidth) => (),
+                | (-1, LayoutMode::FullSize) => (),
                 (-1..=63, _) => {
                     return Err(LayoutParseError::Inconsistent(old_layout, full_layout));
                 }
@@ -40,7 +42,7 @@ impl HorizontalLayout {
         } else {
             match old_layout {
                 -1 => Self {
-                    default_mode: LayoutMode::FullWidth,
+                    default_mode: LayoutMode::FullSize,
                     smushing: EnumSet::empty(),
                 },
                 0 => Self {
@@ -58,6 +60,32 @@ impl HorizontalLayout {
             }
         };
         Ok(layout)
+    }
+
+    pub(crate) fn smush(
+        self,
+        end_char: char,
+        start_char: char,
+        hardblank: Hardblank,
+    ) -> Option<char> {
+        if let LayoutMode::FullSize | LayoutMode::Fitting = self.default_mode {
+            return None;
+        }
+        if self.smushing.is_empty() {
+            // universal smushing
+            return if hardblank == start_char {
+                Some(end_char)
+            } else {
+                Some(start_char)
+            };
+        }
+        self.smushing
+            .iter()
+            .find_map(|smushing| smushing.smush(end_char, start_char, hardblank))
+    }
+
+    pub(crate) const fn is_full_size(self) -> bool {
+        matches!(self.default_mode, LayoutMode::FullSize)
     }
 }
 
@@ -77,7 +105,7 @@ impl VerticalLayout {
 
 #[derive(Clone, Copy, Debug)]
 pub enum LayoutMode {
-    FullWidth,
+    FullSize,
     Fitting,
     Smushing,
 }
@@ -85,7 +113,7 @@ pub enum LayoutMode {
 impl LayoutMode {
     const fn parse(two_bits: u8) -> Option<Self> {
         match two_bits {
-            0 => Some(Self::FullWidth),
+            0 => Some(Self::FullSize),
             1 => Some(Self::Fitting),
             2 | 3 => Some(Self::Smushing),
             _ => None,
@@ -107,6 +135,49 @@ pub enum HorizontalSmushing {
 impl HorizontalSmushing {
     fn parse(old_layout: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(old_layout)
+    }
+
+    fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
+        match self {
+            Self::EqualCharacter => (end == start && hardblank != start).then_some(start),
+            Self::Underscore => {
+                Self::underscore(start, end).or_else(|| Self::underscore(end, start))
+            }
+            Self::Hierarchy => Self::hierarchy(start, end).or_else(|| Self::hierarchy(end, start)),
+            Self::OppositePair => matches!(
+                (end, start),
+                ('[', ']') | (']', '[') | ('{', '}') | ('}', '{') | ('(', ')') | (')', '(')
+            )
+            .then_some('|'),
+            Self::BigX => match (end, start) {
+                ('/', '\\') => Some('|'),
+                ('\\', '/') => Some('Y'),
+                ('>', '<') => Some('X'),
+                _ => None,
+            },
+            Self::Hardblank => (hardblank == end && end == start).then_some(start),
+        }
+    }
+
+    fn underscore(a: char, b: char) -> Option<char> {
+        (matches!(
+            b,
+            '|' | '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
+        ) && a == '_')
+            .then_some(b)
+    }
+    fn hierarchy(a: char, b: char) -> Option<char> {
+        matches!(
+            (a, b),
+            (
+                '|',
+                '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
+            ) | ('/' | '\\', '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>')
+                | ('[' | ']', '{' | '}' | '(' | ')' | '<' | '>')
+                | ('{' | '}', '(' | ')' | '<' | '>')
+                | ('(' | ')', '<' | '>')
+        )
+        .then_some(b)
     }
 }
 
