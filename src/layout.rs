@@ -12,6 +12,12 @@ pub struct Layout<S: EnumSetType> {
     smushing: EnumSet<S>,
 }
 
+impl<S: EnumSetType> Layout<S> {
+    pub(crate) const fn is_full_size(self) -> bool {
+        matches!(self.default_mode, LayoutMode::FullSize)
+    }
+}
+
 impl HorizontalLayout {
     pub(crate) fn parse(
         old_layout: i8,
@@ -83,10 +89,6 @@ impl HorizontalLayout {
             .iter()
             .find_map(|smushing| smushing.smush(end_char, start_char, hardblank))
     }
-
-    pub(crate) const fn is_full_size(self) -> bool {
-        matches!(self.default_mode, LayoutMode::FullSize)
-    }
 }
 
 impl VerticalLayout {
@@ -103,7 +105,7 @@ impl VerticalLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutMode {
     FullSize,
     Fitting,
@@ -205,4 +207,27 @@ pub enum LayoutParseError {
     InvalidOld(i8),
     #[error("invalid `Full_Layout` {0}")]
     InvalidFull(u16),
+}
+
+#[cfg(test)]
+pub(crate) mod test {
+    use enumset::EnumSet;
+
+    use crate::layout::HorizontalSmushing;
+
+    use super::{HorizontalLayout, LayoutMode, VerticalLayout};
+
+    pub(crate) fn check_horizontal_standard(layout: HorizontalLayout) {
+        assert_eq!(layout.default_mode, LayoutMode::Smushing);
+        let expected_smushing = HorizontalSmushing::EqualCharacter
+            | HorizontalSmushing::Underscore
+            | HorizontalSmushing::Hierarchy
+            | HorizontalSmushing::OppositePair;
+        assert_eq!(layout.smushing, expected_smushing)
+    }
+
+    pub(crate) fn check_vertical_standard(layout: VerticalLayout) {
+        assert_eq!(layout.default_mode, LayoutMode::Smushing);
+        assert_eq!(layout.smushing, EnumSet::all())
+    }
 }

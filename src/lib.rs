@@ -367,11 +367,18 @@ pub enum Warning {
 
 #[cfg(test)]
 mod tests {
-    use crate::Font;
+    use super::{Font, layout};
 
     #[test]
     fn parse_standard() {
-        let (_font, warnings) = Font::parse_strict(Font::STANDARD).unwrap();
+        let (font, warnings) = Font::parse_strict(Font::STANDARD).unwrap();
         assert!(warnings.is_empty());
+        assert_eq!(font.header.hardblank, '$');
+        assert_eq!(font.header.height, 6);
+        assert_eq!(font.header.baseline, 5);
+        assert_eq!(font.header.max_length, 16);
+
+        layout::test::check_horizontal_standard(font.header.horizontal_layout);
+        layout::test::check_vertical_standard(font.header.vertical_layout);
     }
 }
