@@ -296,7 +296,7 @@ impl Character {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrintDirection {
     LeftToRight,
     RightToLeft,

@@ -2,45 +2,39 @@ use std::iter::repeat_n;
 
 use itertools::izip;
 
+use crate::layout::{HorizontalLayout, LayoutMode, VerticalLayout};
 use crate::str_ext::StrExt as _;
-use crate::{Font, Header};
+use crate::{Font, Hardblank, Header, PrintDirection};
 
 #[derive(Debug)]
 pub struct Renderer<'font> {
     font: &'font Font,
+    settings: RenderSettings,
 }
 
 impl<'font> Renderer<'font> {
     pub(crate) const fn new(font: &'font Font) -> Self {
-        Self { font }
+        let settings = RenderSettings::from_header(font.header());
+        Self { font, settings }
     }
 
     pub(crate) fn render(&self, string: &str) -> String {
-        if self.font.header.horizontal_layout.is_full_size() {
+        if self.settings.full_width() {
             return self.full_width_render(string);
         }
-        //TODO use print_direction
         let mut buffer: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
         let mut width = 0;
-        for character in string.chars() {
-            let Some(character) = self.font.get(character) else {
-                continue;
-            };
-            let smush_data = self.smush_data(&buffer, &character.rows);
-            let shift = smush_data
-                .iter()
-                .map(|row| row.shift(width, character.width))
-                .min()
-                .unwrap_or_else(|| width.min(character.width));
-
-            for (buffer_row, char_row, smush) in izip!(&mut buffer, &character.rows, smush_data) {
-                smush.combine(shift, buffer_row, char_row)
+        if self.settings.print_direction == PrintDirection::LeftToRight {
+            for character in string.chars() {
+                width = self.appleft(&mut buffer, width, character);
             }
-            width += character.width;
-            width -= shift;
+        } else {
+            for character in string.chars().rev() {
+                width = self.appleft(&mut buffer, width, character);
+            }
         }
         //TODO proper vertical smushing
-        if !self.font.header.vertical_layout.is_full_size() {
+        if !self.settings.full_height() {
             buffer = buffer
                 .into_iter()
                 .skip_while(|row| Self::is_blank(row.iter().copied()))
@@ -49,18 +43,36 @@ impl<'font> Renderer<'font> {
                 .last()
                 .is_some_and(|row| Self::is_blank(row.iter().copied()))
             {
-                _ = buffer.pop();
+                drop(buffer.pop());
             }
         }
-        let end_trim = buffer
+        let left_trim = buffer
             .iter()
             .map(|row| row.iter().rev().take_while(|&&c| c == ' ').count())
             .min()
             .unwrap_or(0);
         for row in &mut buffer {
-            row.truncate(row.len() - end_trim)
+            row.truncate(row.len() - left_trim);
         }
         self.join_and_replace_hard_blanks(buffer)
+    }
+
+    fn appleft(&self, buffer: &mut Vec<Vec<char>>, mut width: usize, character: char) -> usize {
+        let Some(character) = self.font.get(character) else {
+            return width;
+        };
+        let smush_data = self.smush_data(buffer, &character.rows);
+        let shift = smush_data
+            .iter()
+            .map(|row| row.shift(width, character.width))
+            .min()
+            .unwrap_or_else(|| width.min(character.width));
+        for (buffer_row, char_row, smush) in izip!(buffer, &character.rows, smush_data) {
+            smush.combine(shift, buffer_row, char_row);
+        }
+        width += character.width;
+        width -= shift;
+        width
     }
 
     fn smush_data(&self, buffer: &[Vec<char>], char_rows: &[String]) -> Vec<RowSmush> {
@@ -68,32 +80,44 @@ impl<'font> Renderer<'font> {
             .iter()
             .map(|s| s.iter().copied().rev().enumerate().find(|&(_, c)| c != ' '))
             .zip(char_rows.iter().map(|row| row.first_non_blank()))
-            .map(|(end, start)| RowSmush::new(end, start, self.font.header()))
+            .map(|(left, right)| {
+                RowSmush::new(left, right, self.settings, self.font.header.hardblank)
+            })
             .collect()
     }
 
     fn full_width_render(&self, string: &str) -> String {
-        //TODO use print_direction
         let mut buffer = vec![String::new(); self.font.header.height];
-        for char in string.chars() {
-            let Some(char) = self.font.get(char) else {
-                continue;
-            };
-            for (buf_row, char_row) in buffer.iter_mut().zip(&char.rows) {
-                buf_row.push_str(char_row);
+        if self.settings.print_direction == PrintDirection::LeftToRight {
+            for char in string.chars() {
+                self.appleft_full_width(&mut buffer, char);
+            }
+        } else {
+            for char in string.chars().rev() {
+                self.appleft_full_width(&mut buffer, char);
             }
         }
+
         //TODO proper vertical smushing
-        if !self.font.header.vertical_layout.is_full_size() {
+        if !self.settings.full_height() {
             buffer = buffer
                 .into_iter()
                 .skip_while(|row| Self::is_blank(row.chars()))
                 .collect();
             while buffer.last().is_some_and(|row| Self::is_blank(row.chars())) {
-                _ = buffer.pop();
+                drop(buffer.pop());
             }
         }
         self.join_and_replace_hard_blanks(buffer.iter().map(|row| row.chars()))
+    }
+
+    fn appleft_full_width(&self, buffer: &mut [String], char: char) {
+        let Some(char) = self.font.get(char) else {
+            return;
+        };
+        for (buf_row, char_row) in buffer.iter_mut().zip(&char.rows) {
+            buf_row.push_str(char_row);
+        }
     }
 
     fn join_and_replace_hard_blanks(
@@ -123,35 +147,71 @@ impl<'font> Renderer<'font> {
     fn is_blank(mut row: impl Iterator<Item = char>) -> bool {
         row.all(|c| c == ' ')
     }
+
+    #[must_use]
+    pub const fn print_direction(mut self, direction: PrintDirection) -> Self {
+        self.settings.print_direction = direction;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RenderSettings {
+    horizontal_layout: HorizontalLayout,
+    vertical_layout: VerticalLayout,
+    print_direction: PrintDirection,
+    // TODO width
+    // TODO alignment
+}
+
+impl RenderSettings {
+    const fn from_header(header: &Header) -> Self {
+        let horizontal_layout = header.horizontal_layout;
+        let vertical_layout = header.vertical_layout;
+        let print_direction = header.print_direction;
+        Self {
+            horizontal_layout,
+            vertical_layout,
+            print_direction,
+        }
+    }
+
+    fn full_width(self) -> bool {
+        self.horizontal_layout.mode() == LayoutMode::FullSize
+    }
+
+    fn full_height(self) -> bool {
+        self.vertical_layout.mode() == LayoutMode::FullSize
+    }
 }
 
 #[derive(Debug)]
 enum RowSmush {
     BothEmpty,
     Keep {
-        end_offset: usize,
+        left_offset: usize,
     },
     Overwrite {
-        start_offset: usize,
+        right_offset: usize,
     },
     Smush {
-        end_offset: usize,
-        start_offset: usize,
+        left_offset: usize,
+        right_offset: usize,
         smush: Option<char>,
     },
 }
 
 impl RowSmush {
-    fn shift(&self, end: usize, start: usize) -> usize {
+    fn shift(&self, left: usize, right: usize) -> usize {
         match self {
-            Self::BothEmpty => end + start,
-            Self::Keep { end_offset } => end_offset + start,
-            Self::Overwrite { start_offset } => end + start_offset,
+            Self::BothEmpty => left + right,
+            Self::Keep { left_offset } => left_offset + right,
+            Self::Overwrite { right_offset } => left + right_offset,
             Self::Smush {
-                end_offset,
-                start_offset,
+                left_offset,
+                right_offset,
                 smush,
-            } => end_offset + start_offset + usize::from(smush.is_some()),
+            } => left_offset + right_offset + usize::from(smush.is_some()),
         }
     }
 
@@ -161,7 +221,7 @@ impl RowSmush {
                 if char_row.len() <= shift {
                     buffer_row.truncate(buffer_row.len() + char_row.len() - shift);
                 } else {
-                    buffer_row.extend(repeat_n(' ', char_row.len() - shift))
+                    buffer_row.extend(repeat_n(' ', char_row.len() - shift));
                 }
             }
             Self::Overwrite { .. } => {
@@ -170,38 +230,49 @@ impl RowSmush {
                 buffer_row.extend(char_row.chars().skip(skip));
             }
             &Self::Smush {
-                end_offset,
-                start_offset,
+                left_offset,
+                right_offset,
                 smush: Some(smush),
-            } if shift > (start_offset + end_offset) => {
+            } if shift > (right_offset + left_offset) => {
                 // shift == self.shift()
-                buffer_row.truncate(buffer_row.len() - end_offset - 1);
+                buffer_row.truncate(buffer_row.len() - left_offset - 1);
                 buffer_row.push(smush);
-                buffer_row.extend(char_row.chars().skip(start_offset + 1));
+                buffer_row.extend(char_row.chars().skip(right_offset + 1));
             }
-            &Self::Smush { start_offset, .. } => {
-                if shift <= start_offset {
+            &Self::Smush { right_offset, .. } => {
+                if shift <= right_offset {
                     buffer_row.extend(char_row.chars().skip(shift));
                 } else {
-                    buffer_row.truncate(buffer_row.len() + start_offset - shift);
-                    buffer_row.extend(char_row.chars().skip(start_offset));
+                    buffer_row.truncate(buffer_row.len() + right_offset - shift);
+                    buffer_row.extend(char_row.chars().skip(right_offset));
                 }
             }
         }
     }
 
-    fn new(end: Option<(usize, char)>, start: Option<(usize, char)>, header: &Header) -> Self {
-        match (end, start) {
+    fn new(
+        left: Option<(usize, char)>,
+        right: Option<(usize, char)>,
+        settings: RenderSettings,
+        hardblank: Hardblank,
+    ) -> Self {
+        match (left, right) {
             (None, None) => Self::BothEmpty,
-            (None, Some((start_offset, _))) => Self::Overwrite { start_offset },
-            (Some((end_offset, _)), None) => Self::Keep { end_offset },
-            (Some((end_offset, end_char)), Some((start_offset, start_char))) => {
-                let smush = header
-                    .horizontal_layout
-                    .smush(end_char, start_char, header.hardblank);
+            (None, Some((right_offset, _))) => Self::Overwrite { right_offset },
+            (Some((left_offset, _)), None) => Self::Keep { left_offset },
+            (Some((left_offset, left_char)), Some((right_offset, right_char))) => {
+                let smush = if settings.print_direction == PrintDirection::LeftToRight {
+                    settings
+                        .horizontal_layout
+                        .smush(left_char, right_char, hardblank)
+                } else {
+                    settings
+                        .horizontal_layout
+                        .smush(right_char, left_char, hardblank)
+                };
                 Self::Smush {
-                    end_offset,
-                    start_offset,
+                    left_offset,
+                    right_offset,
                     smush,
                 }
             }
@@ -211,7 +282,8 @@ impl RowSmush {
 
 #[cfg(test)]
 mod test {
-    use crate::Font;
+    use crate::render::Renderer;
+    use crate::{Font, PrintDirection};
 
     #[test]
     fn hello() {
@@ -221,7 +293,7 @@ mod test {
 | '_ \ / _ \ | |/ _ \ 
 | | | |  __/ | | (_) |
 |_| |_|\___|_|_|\___/ ";
-        assert_eq!(rendered, expected)
+        assert_eq!(rendered, expected);
     }
 
     #[test]
@@ -233,6 +305,20 @@ mod test {
 |  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |_|
 |_| |_|\___|_|_|\___( )   \_/\_/ \___/|_|  |_|\__,_(_)
                     |/                                ";
-        assert_eq!(rendered, expected)
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn hello_world_flipped() {
+        let rendered = Renderer::new(&Font::standard())
+            .print_direction(PrintDirection::RightToLeft)
+            .render("Hello, world!");
+        let expected = r" _     _ _                            _ _      _   _ 
+| | __| | |_ __ _____      __    ___ | | | ___| | | |
+| |/ _` | | '__/ _ \ \ /\ / /   / _ \| | |/ _ \ |_| |
+|_| (_| | | | | (_) \ V  V /   | (_) | | |  __/  _  |
+(_)\__,_|_|_|  \___/ \_/\_/   ( )___/|_|_|\___|_| |_|
+                              |/                     ";
+        assert_eq!(rendered, expected);
     }
 }

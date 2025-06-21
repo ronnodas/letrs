@@ -8,13 +8,13 @@ pub type VerticalLayout = Layout<VerticalSmushing>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Layout<S: EnumSetType> {
-    default_mode: LayoutMode,
+    mode: LayoutMode,
     smushing: EnumSet<S>,
 }
 
 impl<S: EnumSetType> Layout<S> {
-    pub(crate) const fn is_full_size(self) -> bool {
-        matches!(self.default_mode, LayoutMode::FullSize)
+    pub(crate) const fn mode(&self) -> LayoutMode {
+        self.mode
     }
 }
 
@@ -42,23 +42,23 @@ impl HorizontalLayout {
                     return Err(LayoutParseError::Inconsistent(old_layout, full_layout));
                 };
             Self {
-                default_mode,
+                mode: default_mode,
                 smushing,
             }
         } else {
             match old_layout {
                 -1 => Self {
-                    default_mode: LayoutMode::FullSize,
+                    mode: LayoutMode::FullSize,
                     smushing: EnumSet::empty(),
                 },
                 0 => Self {
-                    default_mode: LayoutMode::Fitting,
+                    mode: LayoutMode::Fitting,
                     smushing: EnumSet::empty(),
                 },
                 1..=63 => {
                     let smushing = HorizontalSmushing::parse(old_layout.cast_unsigned());
                     Self {
-                        default_mode: LayoutMode::Smushing,
+                        mode: LayoutMode::Smushing,
                         smushing,
                     }
                 }
@@ -74,7 +74,7 @@ impl HorizontalLayout {
         start_char: char,
         hardblank: Hardblank,
     ) -> Option<char> {
-        if let LayoutMode::FullSize | LayoutMode::Fitting = self.default_mode {
+        if let LayoutMode::FullSize | LayoutMode::Fitting = self.mode {
             return None;
         }
         if self.smushing.is_empty() {
@@ -99,7 +99,7 @@ impl VerticalLayout {
             LayoutMode::parse(high >> 5).ok_or(LayoutParseError::InvalidFull(full_layout))?;
         let smushing = VerticalSmushing::parse(high);
         Ok(Self {
-            default_mode,
+            mode: default_mode,
             smushing,
         })
     }
@@ -218,16 +218,16 @@ pub(crate) mod test {
     use super::{HorizontalLayout, LayoutMode, VerticalLayout};
 
     pub(crate) fn check_horizontal_standard(layout: HorizontalLayout) {
-        assert_eq!(layout.default_mode, LayoutMode::Smushing);
+        assert_eq!(layout.mode, LayoutMode::Smushing);
         let expected_smushing = HorizontalSmushing::EqualCharacter
             | HorizontalSmushing::Underscore
             | HorizontalSmushing::Hierarchy
             | HorizontalSmushing::OppositePair;
-        assert_eq!(layout.smushing, expected_smushing)
+        assert_eq!(layout.smushing, expected_smushing);
     }
 
     pub(crate) fn check_vertical_standard(layout: VerticalLayout) {
-        assert_eq!(layout.default_mode, LayoutMode::Smushing);
-        assert_eq!(layout.smushing, EnumSet::all())
+        assert_eq!(layout.mode, LayoutMode::Smushing);
+        assert_eq!(layout.smushing, EnumSet::all());
     }
 }
