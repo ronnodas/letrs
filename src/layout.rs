@@ -13,8 +13,12 @@ pub struct Layout<S: EnumSetType> {
 }
 
 impl<S: EnumSetType> Layout<S> {
-    pub(crate) const fn mode(&self) -> LayoutMode {
+    pub const fn mode(&self) -> LayoutMode {
         self.mode
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: LayoutMode) {
+        self.mode = mode;
     }
 }
 
@@ -168,6 +172,7 @@ impl HorizontalSmushing {
         ) && a == '_')
             .then_some(b)
     }
+
     fn hierarchy(a: char, b: char) -> Option<char> {
         matches!(
             (a, b),
