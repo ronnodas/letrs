@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::iter::repeat_n;
+use std::mem;
 
 use itertools::izip;
 
@@ -23,25 +24,44 @@ impl<'font> Renderer<'font> {
     }
 
     #[must_use]
-    pub fn render(&self, mut string: &str) -> String {
-        use std::mem::take;
-
+    pub fn render(&self, mut string: &str, max_width: usize) -> Option<String> {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
-        let mut width = self.settings.width.unwrap_or(0);
+        let width = max_width;
         while !string.is_empty() {
             let (line, line_width, rest) = if self.settings.full_width() {
-                self.render_line_full_width(string)
+                self.render_line_full_width(string, Some(max_width))
             } else {
-                self.render_line(string)
+                self.render_line(string, Some(max_width))
             };
             if rest == string {
-                todo!("probably width too small")
+                return None;
             }
             lines.push(line);
-            debug_assert!(
-                self.settings.width.is_none() || line_width <= width,
-                "rendered line too wide"
-            );
+            debug_assert!(line_width <= width, "rendered line too wide");
+            string = rest;
+        }
+        for row in lines.iter_mut().flatten() {
+            for c in row.iter_mut() {
+                if self.font.header.hardblank == *c {
+                    *c = ' ';
+                }
+            }
+            *row = self.settings.alignment.pad(mem::take(row), width);
+        }
+        let rows = self.stack(lines, width);
+        Some(self.join(rows))
+    }
+
+    pub(crate) fn render_unbounded(&self, mut string: &str) -> String {
+        let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
+        let mut width = 0;
+        while !string.is_empty() {
+            let (line, line_width, rest) = if self.settings.full_width() {
+                self.render_line_full_width(string, None)
+            } else {
+                self.render_line(string, None)
+            };
+            lines.push(line);
             width = width.max(line_width);
             string = rest;
         }
@@ -51,7 +71,7 @@ impl<'font> Renderer<'font> {
                     *c = ' ';
                 }
             }
-            *row = self.settings.alignment.pad(take(row), width);
+            *row = self.settings.alignment.pad(mem::take(row), width);
         }
         let rows = self.stack(lines, width);
         self.join(rows)
@@ -75,13 +95,11 @@ impl<'font> Renderer<'font> {
         self
     }
 
-    #[must_use]
-    pub const fn max_width(mut self, width: usize) -> Self {
-        self.settings.width = Some(width);
-        self
-    }
-
-    fn render_line<'a>(&self, mut string: &'a str) -> (Vec<Vec<char>>, usize, &'a str) {
+    fn render_line<'a>(
+        &self,
+        mut string: &'a str,
+        max_width: Option<usize>,
+    ) -> (Vec<Vec<char>>, usize, &'a str) {
         let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
         let mut width = 0;
         let mut chars = string.chars();
@@ -96,7 +114,7 @@ impl<'font> Renderer<'font> {
                 string = chars.as_str();
                 break;
             }
-            let appended = self.append(&mut line, &mut width, c);
+            let appended = self.append(&mut line, &mut width, c, max_width);
             if !appended {
                 overfull = true;
                 break;
@@ -109,7 +127,7 @@ impl<'font> Renderer<'font> {
                 string = string.trim_start_matches([' ', '\t']);
             }
         }
-        let end_trim = Self::end_trimming(&line);
+        let end_trim = Self::trimming(line.iter().map(|row| row.iter().rev().copied()));
         width -= end_trim;
         for row in &mut line {
             row.truncate(row.len() - end_trim);
@@ -117,8 +135,14 @@ impl<'font> Renderer<'font> {
         (line, width, string)
     }
 
-    fn append(&self, line: &mut Vec<Vec<char>>, width: &mut usize, character: char) -> bool {
-        let Some(character) = self.font.get(character) else {
+    fn append(
+        &self,
+        line: &mut Vec<Vec<char>>,
+        width: &mut usize,
+        c: char,
+        max_width: Option<usize>,
+    ) -> bool {
+        let Some(character) = self.font.get(c) else {
             return true;
         };
         let smush_data = self.row_smush_data(line, &character.rows);
@@ -127,23 +151,26 @@ impl<'font> Renderer<'font> {
             .map(|row| row.shift(*width, character.width))
             .min()
             .unwrap_or_else(|| (*width).min(character.width));
-        let new_width = *width + character.width - shift;
-        //TODO consider trim here
-        if self
-            .settings
-            .width
-            .is_some_and(|max_width| new_width > max_width)
-        {
+        let char_rows_rev = character
+            .rows
+            .iter()
+            .map(|row| row.bidi_chars(self.settings.direction).rev());
+        let trim = Self::trimming(char_rows_rev);
+        if max_width.is_some_and(|max_width| *width + character.width - trim - shift > max_width) {
             return false;
         }
-        *width = new_width;
+        *width = *width + character.width - shift;
         for (buffer_row, char_row, smush) in izip!(line, &character.rows, smush_data) {
             smush.combine(shift, buffer_row, char_row, self.settings.direction);
         }
         true
     }
 
-    fn render_line_full_width<'a>(&self, mut string: &'a str) -> (Vec<Vec<char>>, usize, &'a str) {
+    fn render_line_full_width<'a>(
+        &self,
+        mut string: &'a str,
+        max_width: Option<usize>,
+    ) -> (Vec<Vec<char>>, usize, &'a str) {
         let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
         let mut width = 0;
         let mut chars = string.chars();
@@ -161,11 +188,7 @@ impl<'font> Renderer<'font> {
             let Some(character) = self.font.get(c) else {
                 continue;
             };
-            if self
-                .settings
-                .width
-                .is_some_and(|max_width| character.width + width > max_width)
-            {
+            if max_width.is_some_and(|max_width| character.width + width > max_width) {
                 overfull = true;
                 break;
             }
@@ -259,9 +282,9 @@ impl<'font> Renderer<'font> {
             .collect()
     }
 
-    fn end_trimming(line: &[Vec<char>]) -> usize {
-        line.iter()
-            .map(|row| row.iter().rev().take_while(|&&c| c == ' ').count())
+    fn trimming(line: impl IntoIterator<Item = impl IntoIterator<Item = char>>) -> usize {
+        line.into_iter()
+            .map(|row| row.into_iter().take_while(|&c| c == ' ').count())
             .min()
             .unwrap_or(0)
     }
@@ -272,7 +295,6 @@ pub struct RenderSettings {
     horizontal_layout: HorizontalLayout,
     vertical_layout: VerticalLayout,
     direction: PrintDirection,
-    width: Option<usize>,
     alignment: Alignment,
 }
 
@@ -282,7 +304,6 @@ impl RenderSettings {
             horizontal_layout: header.horizontal_layout,
             vertical_layout: header.vertical_layout,
             direction: header.print_direction,
-            width: None,
             alignment: Alignment::default(),
         }
     }
@@ -299,16 +320,16 @@ impl RenderSettings {
 /// The choice of rendering alignment.
 ///
 /// The alignment is defined relative to the printing direction,
-/// so `Alignment::Start` will align text on the left if printing left-to-right and on the right if
+/// so [`Alignment::Start`] will align text on the left if printing left-to-right and on the right if
 /// printing right-to-left.
 ///
 /// This is only relevant if a maximum width is set or if rendering text with line breaks.
 ///
 /// When the line width and the rendered text width have different parity (i.e. one is odd and the
-/// other is even), `Alignment::Center` rounds so that there's one fewer blank in the 'start'
+/// other is even), [`Alignment::Center`] rounds so that there's one fewer blank in the 'start'
 /// direction than the 'end'.
 ///
-/// The default is `Alignment::Start`.
+/// The default is [`Alignment::Start`].
 #[derive(Clone, Copy, Debug, Default)]
 pub enum Alignment {
     #[default]
@@ -711,7 +732,7 @@ mod test {
     fn hello_world_flipped() {
         let rendered = Renderer::new(&Font::standard())
             .print_direction(PrintDirection::RightToLeft)
-            .render("Hello, world!");
+            .render_unbounded("Hello, world!");
         let expected = r" _     _ _                            _ _      _   _ 
 | | __| | |_ __ _____      __    ___ | | | ___| | | |
 | |/ _` | | '__/ _ \ \ /\ / /   / _ \| | |/ _ \ |_| |
@@ -739,7 +760,7 @@ mod test {
     fn center_align() {
         let rendered = Renderer::new(&Font::standard())
             .alignment(Alignment::Center)
-            .render("short\ncomparatively long");
+            .render_unbounded("short\ncomparatively long");
         let expected = r"                                    _                _                                   
                                 ___| |__   ___  _ __| |_                                 
                                / __| '_ \ / _ \| '__| __|                                
@@ -757,7 +778,7 @@ mod test {
     fn end_align() {
         let rendered = Renderer::new(&Font::standard())
             .alignment(Alignment::End)
-            .render("short\ncomparatively long");
+            .render_unbounded("short\ncomparatively long");
         let expected = r"                                                                    _                _   
                                                                 ___| |__   ___  _ __| |_ 
                                                                / __| '_ \ / _ \| '__| __|
@@ -774,8 +795,8 @@ mod test {
     #[test]
     fn forced_line_break_no_space() {
         let rendered = Renderer::new(&Font::standard())
-            .max_width(80)
-            .render("floccinaucinihilipilification");
+            .render("floccinaucinihilipilification", 80)
+            .unwrap();
         let expected = r"  __ _                _                        _       _ _     _ _ _       _ _  
  / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)_ __ (_) |__ (_) (_)_ __ (_) | 
 | |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| | '_ \| | '_ \| | | | '_ \| | | 
@@ -791,8 +812,8 @@ mod test {
     #[test]
     fn forced_line_break_lots_of_spaces() {
         let rendered = Renderer::new(&Font::standard())
-            .max_width(80)
-            .render("floccinauci                  nihilipilification");
+            .render("floccinauci                  nihilipilification", 80)
+            .unwrap();
         let expected = r"  __ _                _                        _                                
  / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)                               
 | |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| |                               

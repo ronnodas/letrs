@@ -9,9 +9,22 @@ use letrs::{Font, PrintDirection};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let font = cli.font()?;
-    let output = cli.renderer(&font).render(&cli.input);
-    println!("{output}");
+    let (font, warnings) = cli.font()?;
+    let renderer = cli.renderer(&font);
+    if let Some(output) = renderer.render(&cli.input, cli.width) {
+        println!("{output}");
+    } else {
+        debug_assert!(
+            warnings || cli.width < font.header().max_length,
+            "rendering failed even though char width {} <= max width {}",
+            font.header().max_length,
+            cli.width
+        );
+        println!(
+            "Given width is too short, recommend at least {} for the given font",
+            font.header().max_length
+        );
+    }
     Ok(())
 }
 
@@ -29,25 +42,22 @@ struct Cli {
 }
 
 impl Cli {
-    fn font(&self) -> Result<Font> {
-        let font = match &self.font {
-            Some(path) => {
-                let (font, warnings) = Font::parse_strict(&fs::read_to_string(path)?)?;
-                for warning in warnings {
-                    println!("WARNING: {warning}");
-                }
-                font
+    fn font(&self) -> Result<(Font, bool)> {
+        let result = if let Some(path) = &self.font {
+            let (font, warnings) = Font::parse_strict(&fs::read_to_string(path)?)?;
+            let any_warnings = !warnings.is_empty();
+            for warning in warnings {
+                println!("WARNING: {warning}");
             }
-
-            None => Font::standard(),
+            (font, any_warnings)
+        } else {
+            (Font::standard(), false)
         };
-        Ok(font)
+        Ok(result)
     }
 
     fn renderer<'font>(&self, font: &'font Font) -> Renderer<'font> {
-        let mut renderer = Renderer::new(font)
-            .max_width(self.width)
-            .alignment(self.alignment.into());
+        let mut renderer = Renderer::new(font).alignment(self.alignment.into());
         if let Some(direction) = self.direction {
             renderer = renderer.print_direction(direction.into());
         }

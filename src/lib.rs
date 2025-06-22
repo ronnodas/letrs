@@ -62,7 +62,7 @@ impl Font {
 
     #[must_use]
     pub fn render(&self, string: &str) -> String {
-        Renderer::new(self).render(string)
+        Renderer::new(self).render_unbounded(string)
     }
 
     fn parse_characters<'a>(
