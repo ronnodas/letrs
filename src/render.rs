@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::iter::repeat_n;
 
 use itertools::izip;
@@ -15,12 +16,16 @@ pub struct Renderer<'font> {
 }
 
 impl<'font> Renderer<'font> {
+    #[must_use]
     pub fn new(font: &'font Font) -> Self {
         let settings = RenderSettings::from_header(font.header());
         Self { font, settings }
     }
 
+    #[must_use]
     pub fn render(&self, mut string: &str) -> String {
+        use std::mem::take;
+
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
         let mut width = self.settings.width.unwrap_or(0);
         while !string.is_empty() {
@@ -33,17 +38,20 @@ impl<'font> Renderer<'font> {
                 todo!("probably width too small")
             }
             lines.push(line);
-            debug_assert!(self.settings.width.is_none() || line_width <= width);
+            debug_assert!(
+                self.settings.width.is_none() || line_width <= width,
+                "rendered line too wide"
+            );
             width = width.max(line_width);
             string = rest;
         }
         for row in lines.iter_mut().flatten() {
             for c in row.iter_mut() {
                 if self.font.header.hardblank == *c {
-                    *c = ' '
+                    *c = ' ';
                 }
             }
-            self.settings.alignment.pad(row, width);
+            *row = self.settings.alignment.pad(take(row), width);
         }
         let rows = self.stack(lines, width);
         self.join(rows)
@@ -56,8 +64,20 @@ impl<'font> Renderer<'font> {
     }
 
     #[must_use]
-    pub fn vertical_layout(mut self, mode: LayoutMode) -> Self {
+    pub const fn vertical_layout(mut self, mode: LayoutMode) -> Self {
         self.settings.vertical_layout.set_mode(mode);
+        self
+    }
+
+    #[must_use]
+    pub const fn alignment(mut self, alignment: Alignment) -> Self {
+        self.settings.alignment = alignment;
+        self
+    }
+
+    #[must_use]
+    pub const fn max_width(mut self, width: usize) -> Self {
+        self.settings.width = Some(width);
         self
     }
 
@@ -65,24 +85,31 @@ impl<'font> Renderer<'font> {
         let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
         let mut width = 0;
         let mut chars = string.chars();
+        let mut before_space = None;
+        let mut overfull = false;
         while let Some(c) = chars.next() {
             let c = if c == '\t' { ' ' } else { c };
+            if c == ' ' {
+                before_space = Some((line.clone(), width, string));
+            }
             if LINE_BREAK_CHARACTERS.contains(&c) {
                 string = chars.as_str();
                 break;
             }
             let appended = self.append(&mut line, &mut width, c);
             if !appended {
+                overfull = true;
                 break;
             }
             string = chars.as_str();
         }
-
-        let end_trim = line
-            .iter()
-            .map(|row| row.iter().rev().take_while(|&&c| c == ' ').count())
-            .min()
-            .unwrap_or(0);
+        if overfull {
+            if let Some(saved) = before_space {
+                (line, width, string) = saved;
+                string = string.trim_start_matches([' ', '\t']);
+            }
+        }
+        let end_trim = Self::end_trimming(&line);
         width -= end_trim;
         for row in &mut line {
             row.truncate(row.len() - end_trim);
@@ -101,15 +128,15 @@ impl<'font> Renderer<'font> {
             .min()
             .unwrap_or_else(|| (*width).min(character.width));
         let new_width = *width + character.width - shift;
+        //TODO consider trim here
         if self
             .settings
             .width
             .is_some_and(|max_width| new_width > max_width)
         {
             return false;
-        } else {
-            *width = new_width
         }
+        *width = new_width;
         for (buffer_row, char_row, smush) in izip!(line, &character.rows, smush_data) {
             smush.combine(shift, buffer_row, char_row, self.settings.direction);
         }
@@ -120,8 +147,13 @@ impl<'font> Renderer<'font> {
         let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
         let mut width = 0;
         let mut chars = string.chars();
+        let mut before_space = None;
+        let mut overfull = false;
         while let Some(c) = chars.next() {
             let c = if c == '\t' { ' ' } else { c };
+            if c == ' ' {
+                before_space = Some((line.clone(), width, string));
+            }
             if LINE_BREAK_CHARACTERS.contains(&c) {
                 string = chars.as_str();
                 break;
@@ -134,15 +166,21 @@ impl<'font> Renderer<'font> {
                 .width
                 .is_some_and(|max_width| character.width + width > max_width)
             {
+                overfull = true;
                 break;
-            } else {
-                width += character.width;
             }
+            width += character.width;
             for (buf_row, char_row) in line.iter_mut().zip(&character.rows) {
                 buf_row.extend(char_row.bidi_chars(self.settings.direction));
             }
 
             string = chars.as_str();
+        }
+        if overfull {
+            if let Some(saved) = before_space {
+                (line, width, string) = saved;
+                string = string.trim_start_matches([' ', '\t']);
+            }
         }
         (line, width, string)
     }
@@ -172,36 +210,63 @@ impl<'font> Renderer<'font> {
             if self.settings.direction == PrintDirection::LeftToRight {
                 buffer.extend(row);
             } else {
-                buffer.extend(row.into_iter().rev())
+                buffer.extend(row.into_iter().rev());
             }
             first = false;
         }
         buffer
     }
 
-    fn is_blank(mut row: impl Iterator<Item = char>) -> bool {
-        row.all(|c| c == ' ')
-    }
-
     fn stack(&self, lines: Vec<Vec<Vec<char>>>, width: usize) -> Vec<Vec<char>> {
         let mut rows = Vec::new();
         if self.settings.full_height() {
-            rows.extend(lines.into_iter().flatten())
+            rows.extend(lines.into_iter().flatten());
         } else {
             for line in lines {
-                todo!()
-                // let smush_data = self.column_smush_data(&rows, &line, width);
-                // let shift = smush_data
-                //     .iter()
-                //     .map(|row| row.shift(*width, character.width))
-                //     .min()
-                //     .unwrap_or_else(|| (*width).min(character.width));
-                // for (buffer_row, char_row, smush) in todo!() {
-                //     smush.combine(shift, buffer_row, char_row, self.settings.direction);
-                // }
+                // Performance-wise, it might be better to transpose rows and line
+                let smush_data = self.column_smush_data(&rows, &line, width);
+                let shift = smush_data
+                    .iter()
+                    .map(|column| column.shift(rows.len(), line.len()))
+                    .min()
+                    .unwrap_or_else(|| rows.len().min(line.len()));
+                for (i, smush) in smush_data.into_iter().enumerate() {
+                    smush.combine(&mut rows, &line, i, shift);
+                }
+                if shift > line.len() {
+                    rows.truncate(rows.len() + line.len() - shift);
+                }
+                rows.extend(line.into_iter().skip(shift));
+            }
+        }
+        if !self.settings.full_height() {
+            while rows.last().is_some_and(|row| row.iter().all(|&c| c == ' ')) {
+                drop(rows.pop());
             }
         }
         rows
+    }
+
+    fn column_smush_data(
+        &self,
+        end: &[Vec<char>],
+        start: &[Vec<char>],
+        width: usize,
+    ) -> Vec<ColumnSmush> {
+        (0..width)
+            .map(|i| {
+                let end_counts = BlanksAndBars::count(end.iter().rev().map(|row| row[i]));
+                let start_counts = BlanksAndBars::count(start.iter().map(|row| row[i]));
+                ColumnSmush::new(&end_counts, &start_counts, self.settings.vertical_layout)
+            })
+            .collect()
+    }
+
+    fn end_trimming(line: &[Vec<char>]) -> usize {
+        line.iter()
+            .map(|row| row.iter().rev().take_while(|&&c| c == ' ').count())
+            .min()
+            .unwrap_or(0)
     }
 }
 
@@ -234,7 +299,9 @@ impl RenderSettings {
     }
 }
 
-/// The choice of rendering alignment. The alignment is defined relative to the printing direction,
+/// The choice of rendering alignment.
+///
+/// The alignment is defined relative to the printing direction,
 /// so `Alignment::Start` will align text on the left if printing left-to-right and on the right if
 /// printing right-to-left.
 ///
@@ -254,51 +321,85 @@ pub enum Alignment {
 }
 
 impl Alignment {
-    fn pad(&self, row: &mut Vec<char>, to_width: usize) {
-        use std::mem::take;
-
+    fn pad(self, mut row: Vec<char>, to_width: usize) -> Vec<char> {
         let Some(padding) = to_width.checked_sub(row.len()) else {
-            return;
+            return row;
         };
         match self {
-            Self::Start => row.extend(repeat_n(' ', padding)),
+            Self::Start => {
+                row.extend(repeat_n(' ', padding));
+                row
+            }
             Self::Center => {
                 let start = padding / 2;
-                *row = repeat_n(' ', start)
-                    .chain(take(row))
+                repeat_n(' ', start)
+                    .chain(row)
                     .chain(repeat_n(' ', padding - start))
-                    .collect();
+                    .collect()
             }
-            Self::End => *row = repeat_n(' ', padding).chain(take(row)).collect(),
+            Self::End => repeat_n(' ', padding).chain(row).collect(),
         }
     }
 }
 
 #[derive(Debug)]
 enum RowSmush {
-    BothEmpty,
+    BothBlank,
     Keep {
-        left_offset: usize,
+        end_offset: usize,
     },
     Overwrite {
-        right_offset: usize,
+        start_offset: usize,
     },
     Smush {
-        left_offset: usize,
-        right_offset: usize,
+        end_offset: usize,
+        start_offset: usize,
         smush: Option<char>,
     },
 }
 
 impl RowSmush {
-    fn shift(&self, left: usize, right: usize) -> usize {
+    fn new(
+        end: Option<(usize, char)>,
+        start: Option<(usize, char)>,
+        settings: RenderSettings,
+        hardblank: Hardblank,
+    ) -> Self {
+        match (end, start) {
+            (None, None) => Self::BothBlank,
+            (None, Some((right_offset, _))) => Self::Overwrite {
+                start_offset: right_offset,
+            },
+            (Some((left_offset, _)), None) => Self::Keep {
+                end_offset: left_offset,
+            },
+            (Some((left_offset, left_char)), Some((right_offset, right_char))) => {
+                let smush = if settings.direction == PrintDirection::LeftToRight {
+                    settings
+                        .horizontal_layout
+                        .smush(left_char, right_char, hardblank)
+                } else {
+                    settings
+                        .horizontal_layout
+                        .smush(right_char, left_char, hardblank)
+                };
+                Self::Smush {
+                    end_offset: left_offset,
+                    start_offset: right_offset,
+                    smush,
+                }
+            }
+        }
+    }
+
+    fn shift(&self, end: usize, start: usize) -> usize {
         match self {
-            Self::BothEmpty => left + right,
-            Self::Keep { left_offset } => left_offset + right,
-            Self::Overwrite { right_offset } => left + right_offset,
+            Self::BothBlank => end + start,
+            Self::Keep { end_offset } => end_offset + start,
+            Self::Overwrite { start_offset } => end + start_offset,
             Self::Smush {
-                left_offset,
-                right_offset,
+                end_offset: left_offset,
+                start_offset: right_offset,
                 smush,
             } => left_offset + right_offset + usize::from(smush.is_some()),
         }
@@ -312,7 +413,7 @@ impl RowSmush {
         direction: PrintDirection,
     ) {
         match self {
-            Self::BothEmpty | Self::Keep { .. } => {
+            Self::BothBlank | Self::Keep { .. } => {
                 if char_row.len() <= shift {
                     buffer_row.truncate(buffer_row.len() + char_row.len() - shift);
                 } else {
@@ -325,60 +426,262 @@ impl RowSmush {
                 buffer_row.extend(char_row.bidi_chars(direction).skip(skip));
             }
             &Self::Smush {
-                left_offset,
-                right_offset,
+                end_offset,
+                start_offset,
                 smush: Some(smush),
-            } if shift > (right_offset + left_offset) => {
+            } if shift > (start_offset + end_offset) => {
                 // shift == self.shift()
-                buffer_row.truncate(buffer_row.len() - left_offset - 1);
+                buffer_row.truncate(buffer_row.len() - end_offset - 1);
                 buffer_row.push(smush);
-                buffer_row.extend(char_row.bidi_chars(direction).skip(right_offset + 1));
+                buffer_row.extend(char_row.bidi_chars(direction).skip(start_offset + 1));
             }
-            &Self::Smush { right_offset, .. } => {
-                if shift <= right_offset {
+            &Self::Smush { start_offset, .. } => {
+                if shift <= start_offset {
                     buffer_row.extend(char_row.bidi_chars(direction).skip(shift));
                 } else {
-                    buffer_row.truncate(buffer_row.len() + right_offset - shift);
-                    buffer_row.extend(char_row.bidi_chars(direction).skip(right_offset));
-                }
-            }
-        }
-    }
-
-    fn new(
-        left: Option<(usize, char)>,
-        right: Option<(usize, char)>,
-        settings: RenderSettings,
-        hardblank: Hardblank,
-    ) -> Self {
-        match (left, right) {
-            (None, None) => Self::BothEmpty,
-            (None, Some((right_offset, _))) => Self::Overwrite { right_offset },
-            (Some((left_offset, _)), None) => Self::Keep { left_offset },
-            (Some((left_offset, left_char)), Some((right_offset, right_char))) => {
-                let smush = if settings.direction == PrintDirection::LeftToRight {
-                    settings
-                        .horizontal_layout
-                        .smush(left_char, right_char, hardblank)
-                } else {
-                    settings
-                        .horizontal_layout
-                        .smush(right_char, left_char, hardblank)
-                };
-                Self::Smush {
-                    left_offset,
-                    right_offset,
-                    smush,
+                    buffer_row.truncate(buffer_row.len() + start_offset - shift);
+                    buffer_row.extend(char_row.bidi_chars(direction).skip(start_offset));
                 }
             }
         }
     }
 }
 
+enum ColumnSmush {
+    Keep {
+        end_offset: usize,
+    },
+    Overwrite {
+        start_offset: usize,
+    },
+    NoBars {
+        end_blanks: usize,
+        start_blanks: usize,
+        smush: Option<char>,
+    },
+    EndBar {
+        end_blanks: usize,
+        start_blanks: usize,
+        start_offset: usize,
+        smush: Option<char>,
+    },
+    StartBar {
+        smush: Option<char>,
+        end_offset: usize,
+        end_blanks: usize,
+        start_blanks: usize,
+    },
+    DoubleSmush {
+        end_blanks: usize,
+        bars: usize,
+        start_blanks: usize,
+        smush: Option<(char, char)>,
+    },
+}
+
+impl ColumnSmush {
+    fn new(end: &BlanksAndBars, start: &BlanksAndBars, layout: VerticalLayout) -> Self {
+        if layout.super_smushing() {
+            match (end.next, end.bars, start.bars, start.next) {
+                (_, _, 0, None) => Self::Keep {
+                    end_offset: end.total(),
+                },
+                (None, 0, _, _) => Self::Overwrite {
+                    start_offset: start.total(),
+                },
+                (Some(end_next), 0, 0, Some(start_next)) => Self::NoBars {
+                    end_blanks: end.blanks,
+                    start_blanks: start.blanks,
+                    smush: layout.smush(end_next, start_next),
+                },
+                _ => match end.bars.cmp(&start.bars) {
+                    Ordering::Less => Self::StartBar {
+                        smush: end.next.and_then(|end| layout.smush(end, '|')),
+                        end_offset: end.total(),
+                        end_blanks: end.blanks,
+                        start_blanks: start.blanks,
+                    },
+                    Ordering::Equal => {
+                        let smush = end
+                            .next
+                            .and_then(|end| layout.smush(end, '|'))
+                            .zip(start.next.and_then(|start| layout.smush('|', start)));
+                        Self::DoubleSmush {
+                            end_blanks: end.blanks,
+                            bars: end.bars,
+                            start_blanks: start.blanks,
+                            smush,
+                        }
+                    }
+                    Ordering::Greater => Self::EndBar {
+                        end_blanks: end.blanks,
+                        start_blanks: start.blanks,
+                        start_offset: start.total(),
+                        smush: start.next.and_then(|start| layout.smush('|', start)),
+                    },
+                },
+            }
+        } else {
+            match (end.next_to_blank(), start.next_to_blank()) {
+                (_, None) => Self::Keep {
+                    end_offset: end.blanks,
+                },
+                (None, Some(_)) => Self::Overwrite {
+                    start_offset: start.blanks,
+                },
+                (Some(end_next), Some(start_next)) => Self::NoBars {
+                    end_blanks: end.blanks,
+                    start_blanks: start.blanks,
+                    smush: layout.smush(end_next, start_next),
+                },
+            }
+        }
+    }
+
+    fn shift(&self, end: usize, start: usize) -> usize {
+        match self {
+            Self::Keep { end_offset } => end_offset + start,
+            Self::Overwrite { start_offset } => start_offset + end,
+            Self::NoBars {
+                end_blanks,
+                start_blanks,
+                smush,
+            } => end_blanks + start_blanks + usize::from(smush.is_some()),
+            Self::EndBar {
+                end_blanks,
+                start_offset,
+                smush,
+                ..
+            } => end_blanks + start_offset + usize::from(smush.is_some()),
+            Self::StartBar {
+                smush,
+                end_offset,
+                start_blanks,
+                ..
+            } => end_offset + start_blanks + usize::from(smush.is_some()),
+            Self::DoubleSmush {
+                end_blanks,
+                bars,
+                start_blanks,
+                smush,
+            } => end_blanks + bars + start_blanks + usize::from(smush.is_some()),
+        }
+    }
+
+    fn combine(&self, rows: &mut [Vec<char>], line: &[Vec<char>], i: usize, shift: usize) {
+        // this is mostly shift.saturating_sub(start_blanks).min(end_blanks) and its special cases
+        let rows_to_overwrite = match self {
+            Self::Keep { .. } => return,
+            &Self::Overwrite { .. } => rows.len().min(shift),
+            &Self::NoBars {
+                end_blanks,
+                start_blanks,
+                smush,
+            } => {
+                if shift > end_blanks + start_blanks {
+                    let smush = smush.expect("shift <= ... + smush.is_some()");
+                    rows[rows.len() - end_blanks - 1][i] = smush;
+                    end_blanks
+                } else {
+                    shift.saturating_sub(start_blanks)
+                }
+            }
+            &Self::EndBar {
+                end_blanks,
+                start_blanks,
+                start_offset,
+                smush,
+            } => {
+                if shift > end_blanks + start_offset {
+                    let smush = smush.expect("shift <= ... + smush.is_some()");
+                    rows[rows.len() - end_blanks - 1][i] = smush;
+                    end_blanks
+                } else {
+                    shift.saturating_sub(start_blanks).min(end_blanks)
+                }
+            }
+            &Self::StartBar {
+                smush,
+                end_offset,
+                end_blanks,
+                start_blanks,
+            } => {
+                if shift > end_offset + start_blanks {
+                    let smush = smush.expect("shift <= ... + smush.is_some()");
+                    rows[rows.len() - end_offset - 1][i] = smush;
+                    end_blanks
+                } else {
+                    shift.saturating_sub(start_blanks).min(end_blanks)
+                }
+            }
+            &Self::DoubleSmush {
+                end_blanks,
+                bars,
+                start_blanks,
+                smush,
+            } => {
+                if shift > end_blanks + bars + start_blanks {
+                    let (row_bar_smush, line_bar_smush) =
+                        smush.expect("shift <= ... + smush.is_some()");
+                    rows[rows.len() - end_blanks - bars - 1][i] = row_bar_smush;
+                    rows[rows.len() - end_blanks - 1][i] = line_bar_smush;
+                    end_blanks
+                } else {
+                    shift.saturating_sub(start_blanks).min(end_blanks)
+                }
+            }
+        };
+        let fixed_rows = rows.len() - rows_to_overwrite;
+        rows.iter_mut()
+            .skip(fixed_rows)
+            .zip(line.iter().skip(shift - rows_to_overwrite))
+            .for_each(|(row, line_row)| row[i] = line_row[i]);
+    }
+}
+
+struct BlanksAndBars {
+    blanks: usize,
+    bars: usize,
+    next: Option<char>,
+}
+
+impl BlanksAndBars {
+    fn count(chars: impl Iterator<Item = char>) -> Self {
+        let mut blanks = 0;
+        let mut bars = 0;
+        let mut next = None;
+        let mut in_bars = false;
+        for c in chars {
+            match (c, in_bars) {
+                (' ', false) => blanks += 1,
+                ('|', false) => {
+                    bars += 1;
+                    in_bars = true;
+                }
+                ('|', true) => bars += 1,
+                (c, _) => {
+                    next = Some(c);
+                    break;
+                }
+            }
+        }
+        Self { blanks, bars, next }
+    }
+
+    const fn total(&self) -> usize {
+        self.blanks + self.bars
+    }
+
+    const fn next_to_blank(&self) -> Option<char> {
+        if self.bars > 0 { Some('|') } else { self.next }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::render::Renderer;
     use crate::{Font, PrintDirection};
+
+    use super::{Alignment, Renderer};
 
     #[test]
     fn hello() {
@@ -414,6 +717,91 @@ mod test {
 |_| (_| | | | | (_) \ V  V /   | (_) | | |  __/  _  |
 (_)\__,_|_|_|  \___/ \_/\_/   ( )___/|_|_|\___|_| |_|
                               |/                     ";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn multi_line() {
+        let rendered = Font::standard().render("Hello\n  world!");
+        let expected = r" _   _      _ _                 
+| | | | ___| | | ___            
+| |_| |/ _ \ | |/ _ \           
+|  _  |  __/ | | (_) |_     _ _ 
+|_|_|_|\___|_|_|\___/| | __| | |
+  \ \ /\ / / _ \| '__| |/ _` | |
+   \ V  V / (_) | |  | | (_| |_|
+    \_/\_/ \___/|_|  |_|\__,_(_)";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn center_align() {
+        let rendered = Renderer::new(&Font::standard())
+            .alignment(Alignment::Center)
+            .render("short\ncomparatively long");
+        let expected = r"                                    _                _                                   
+                                ___| |__   ___  _ __| |_                                 
+                               / __| '_ \ / _ \| '__| __|                                
+                               \__ \ | | | (_) | |  | |_                                 
+                               |___/_| |_|\___/|_|   \__|  _         _                   
+  ___ ___  _ __ ___  _ __   __ _ _ __ __ _| |_(_)_   _____| |_   _  | | ___  _ __   __ _ 
+ / __/ _ \| '_ ` _ \| '_ \ / _` | '__/ _` | __| \ \ / / _ \ | | | | | |/ _ \| '_ \ / _` |
+| (_| (_) | | | | | | |_) | (_| | | | (_| | |_| |\ V /  __/ | |_| | | | (_) | | | | (_| |
+ \___\___/|_| |_| |_| .__/ \__,_|_|  \__,_|\__|_| \_/ \___|_|\__, | |_|\___/|_| |_|\__, |
+                    |_|                                      |___/                 |___/ ";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn end_align() {
+        let rendered = Renderer::new(&Font::standard())
+            .alignment(Alignment::End)
+            .render("short\ncomparatively long");
+        let expected = r"                                                                    _                _   
+                                                                ___| |__   ___  _ __| |_ 
+                                                               / __| '_ \ / _ \| '__| __|
+                                                               \__ \ | | | (_) | |  | |_ 
+                                           _   _           _   |___/_| |_|\___/|_|   \__|
+  ___ ___  _ __ ___  _ __   __ _ _ __ __ _| |_(_)_   _____| |_   _  | | ___  _ __   __ _ 
+ / __/ _ \| '_ ` _ \| '_ \ / _` | '__/ _` | __| \ \ / / _ \ | | | | | |/ _ \| '_ \ / _` |
+| (_| (_) | | | | | | |_) | (_| | | | (_| | |_| |\ V /  __/ | |_| | | | (_) | | | | (_| |
+ \___\___/|_| |_| |_| .__/ \__,_|_|  \__,_|\__|_| \_/ \___|_|\__, | |_|\___/|_| |_|\__, |
+                    |_|                                      |___/                 |___/ ";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn forced_line_break_no_space() {
+        let rendered = Renderer::new(&Font::standard())
+            .max_width(80)
+            .render("floccinaucinihilipilification");
+        let expected = r"  __ _                _                        _       _ _     _ _ _       _ _  
+ / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)_ __ (_) |__ (_) (_)_ __ (_) | 
+| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| | '_ \| | '_ \| | | | '_ \| | | 
+|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| | | | | | | | | | | | |_) | | | 
+|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_| |_|_|_| |_|_|_|_| .__/|_|_| 
+(_)/ _(_) ___ __ _| |_(_) ___  _ __                                 |_|         
+| | |_| |/ __/ _` | __| |/ _ \| '_ \                                            
+| |  _| | (_| (_| | |_| | (_) | | | |                                           
+|_|_| |_|\___\__,_|\__|_|\___/|_| |_|                                           ";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn forced_line_break_lots_of_spaces() {
+        let rendered = Renderer::new(&Font::standard())
+            .max_width(80)
+            .render("floccinauci                  nihilipilification");
+        let expected = r"  __ _                _                        _                                
+ / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)                               
+| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| |                               
+|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| |                               
+|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_   _                          
+ _ __ (_) |__ (_) (_)_ __ (_) (_)/ _(_) ___ __ _| |_(_) ___  _ __               
+| '_ \| | '_ \| | | | '_ \| | | | |_| |/ __/ _` | __| |/ _ \| '_ \              
+| | | | | | | | | | | |_) | | | |  _| | (_| (_| | |_| | (_) | | | |             
+|_| |_|_|_| |_|_|_|_| .__/|_|_|_|_| |_|\___\__,_|\__|_|\___/|_| |_|             
+                    |_|                                                         ";
         assert_eq!(rendered, expected);
     }
 }

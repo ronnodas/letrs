@@ -17,7 +17,7 @@ impl<S: EnumSetType> Layout<S> {
         self.mode
     }
 
-    pub(crate) fn set_mode(&mut self, mode: LayoutMode) {
+    pub(crate) const fn set_mode(&mut self, mode: LayoutMode) {
         self.mode = mode;
     }
 }
@@ -72,26 +72,21 @@ impl HorizontalLayout {
         Ok(layout)
     }
 
-    pub(crate) fn smush(
-        self,
-        end_char: char,
-        start_char: char,
-        hardblank: Hardblank,
-    ) -> Option<char> {
+    pub(crate) fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
         if let LayoutMode::FullSize | LayoutMode::Fitting = self.mode {
             return None;
         }
         if self.smushing.is_empty() {
             // universal smushing
-            return if hardblank == start_char {
-                Some(end_char)
+            return if hardblank == start {
+                Some(end)
             } else {
-                Some(start_char)
+                Some(start)
             };
         }
         self.smushing
             .iter()
-            .find_map(|smushing| smushing.smush(end_char, start_char, hardblank))
+            .find_map(|smushing| smushing.smush(end, start, hardblank))
     }
 }
 
@@ -106,6 +101,24 @@ impl VerticalLayout {
             mode: default_mode,
             smushing,
         })
+    }
+
+    pub(crate) fn smush(self, end: char, start: char) -> Option<char> {
+        if let LayoutMode::FullSize | LayoutMode::Fitting = self.mode {
+            return None;
+        }
+        if self.smushing.is_empty() {
+            // universal smushing
+            return Some(end);
+        }
+        self.smushing
+            .iter()
+            .find_map(|smushing| smushing.smush(end, start))
+    }
+
+    pub(crate) fn super_smushing(self) -> bool {
+        self.mode == LayoutMode::Smushing
+            && self.smushing.contains(VerticalSmushing::VerticalLineSuper)
     }
 }
 
@@ -146,10 +159,8 @@ impl HorizontalSmushing {
     fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
         match self {
             Self::EqualCharacter => (end == start && hardblank != start).then_some(start),
-            Self::Underscore => {
-                Self::underscore(start, end).or_else(|| Self::underscore(end, start))
-            }
-            Self::Hierarchy => Self::hierarchy(start, end).or_else(|| Self::hierarchy(end, start)),
+            Self::Underscore => underscore(start, end).or_else(|| underscore(end, start)),
+            Self::Hierarchy => hierarchy(start, end).or_else(|| hierarchy(end, start)),
             Self::OppositePair => matches!(
                 (end, start),
                 ('[', ']') | (']', '[') | ('{', '}') | ('}', '{') | ('(', ')') | (')', '(')
@@ -163,28 +174,6 @@ impl HorizontalSmushing {
             },
             Self::Hardblank => (hardblank == end && end == start).then_some(start),
         }
-    }
-
-    fn underscore(a: char, b: char) -> Option<char> {
-        (matches!(
-            b,
-            '|' | '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
-        ) && a == '_')
-            .then_some(b)
-    }
-
-    fn hierarchy(a: char, b: char) -> Option<char> {
-        matches!(
-            (a, b),
-            (
-                '|',
-                '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
-            ) | ('/' | '\\', '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>')
-                | ('[' | ']', '{' | '}' | '(' | ')' | '<' | '>')
-                | ('{' | '}', '(' | ')' | '<' | '>')
-                | ('(' | ')', '<' | '>')
-        )
-        .then_some(b)
     }
 }
 
@@ -202,6 +191,38 @@ impl VerticalSmushing {
     fn parse(high: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(high)
     }
+
+    fn smush(self, end: char, start: char) -> Option<char> {
+        match self {
+            Self::EqualCharacter => (end == start).then_some(end),
+            Self::Underscore => underscore(start, end).or_else(|| underscore(end, start)),
+            Self::Hierarchy => hierarchy(start, end).or_else(|| hierarchy(end, start)),
+            Self::HorizontalLine => matches!((start, end), ('_', '-') | ('-', '_')).then_some('='),
+            Self::VerticalLineSuper => None,
+        }
+    }
+}
+
+fn underscore(a: char, b: char) -> Option<char> {
+    (matches!(
+        b,
+        '|' | '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
+    ) && a == '_')
+        .then_some(b)
+}
+
+fn hierarchy(a: char, b: char) -> Option<char> {
+    matches!(
+        (a, b),
+        (
+            '|',
+            '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
+        ) | ('/' | '\\', '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>')
+            | ('[' | ']', '{' | '}' | '(' | ')' | '<' | '>')
+            | ('{' | '}', '(' | ')' | '<' | '>')
+            | ('(' | ')', '<' | '>')
+    )
+    .then_some(b)
 }
 
 #[derive(Error, Debug)]
