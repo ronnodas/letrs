@@ -212,7 +212,7 @@ impl Header {
             1
         });
         if !(0 < baseline && baseline <= height) {
-            warnings.push(Warning::BaselineOutOfRange(baseline));
+            warnings.push(Warning::BaselineOutOfRange { baseline, height });
         }
         let max_length = max_length.parse()?;
         let comment_lines = comment_lines.parse()?;
@@ -348,21 +348,33 @@ pub enum HeaderError {
     ZeroHeight,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Warning {
+    #[error("font contains non-ascii characters")]
     NonAscii,
+    #[error(r#"could not parse "{0}" as the baseline parameter"#)]
     Baseline(String),
-    BaselineOutOfRange(usize),
-    TooFewCodetags {
-        found: usize,
-        expected: usize,
-    },
+    #[error("baseline {baseline} not between 1 and {height} (height)")]
+    BaselineOutOfRange { baseline: usize, height: usize },
+    #[error("found {found} codetags but expected {expected} from header")]
+    TooFewCodetags { found: usize, expected: usize },
+    #[error("FIGcharacter with codepoint {} has inconsistent width", Self::char_debug(*.0))]
     InconsistentWidth(u32),
+    #[error("FIGcharacter with codepoint {} has width {width} > {max_length} (from header)", Self::char_debug(*.codepoint))]
     ExcessLength {
         codepoint: u32,
         width: usize,
         max_length: usize,
     },
+}
+
+impl Warning {
+    fn char_debug(codepoint: u32) -> String {
+        char::try_from(codepoint).map_or_else(
+            |_| format!("\\u{{{codepoint:04X}}}"),
+            |char| char.to_string(),
+        )
+    }
 }
 
 #[cfg(test)]
