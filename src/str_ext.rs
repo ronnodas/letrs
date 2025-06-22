@@ -4,19 +4,12 @@ use crate::PrintDirection;
 
 pub(crate) trait StrExt {
     fn last(&self) -> Option<char>;
-    fn start_non_blank(&self, direction: PrintDirection) -> Option<(usize, char)>;
     fn bidi_chars(&self, direction: PrintDirection) -> BidiChars<'_>;
 }
 
 impl StrExt for str {
     fn last(&self) -> Option<char> {
         self.chars().next_back()
-    }
-
-    fn start_non_blank(&self, direction: PrintDirection) -> Option<(usize, char)> {
-        self.bidi_chars(direction)
-            .enumerate()
-            .find(|&(_, c)| c != ' ')
     }
 
     fn bidi_chars(&self, direction: PrintDirection) -> BidiChars<'_> {

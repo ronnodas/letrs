@@ -188,14 +188,11 @@ impl<'font> Renderer<'font> {
     fn row_smush_data(&self, buffer: &[Vec<char>], char_rows: &[String]) -> Vec<RowSmush> {
         buffer
             .iter()
-            .map(|s| s.iter().copied().rev().enumerate().find(|&(_, c)| c != ' '))
-            .zip(
-                char_rows
-                    .iter()
-                    .map(|row| row.start_non_blank(self.settings.direction)),
-            )
-            .map(|(left, right)| {
-                RowSmush::new(left, right, self.settings, self.font.header.hardblank)
+            .zip(char_rows)
+            .map(|(end, start)| {
+                let end = RowSmush::count_blanks(end.iter().rev().copied());
+                let start = RowSmush::count_blanks(start.bidi_chars(self.settings.direction));
+                RowSmush::new(end, start, self.settings, self.font.header.hardblank)
             })
             .collect()
     }
@@ -344,48 +341,38 @@ impl Alignment {
 
 #[derive(Debug)]
 enum RowSmush {
-    BothBlank,
     Keep {
-        end_offset: usize,
+        end_blanks: usize,
     },
     Overwrite {
-        start_offset: usize,
+        start_blanks: usize,
     },
     Smush {
-        end_offset: usize,
-        start_offset: usize,
+        end_blanks: usize,
+        start_blanks: usize,
         smush: Option<char>,
     },
 }
 
 impl RowSmush {
     fn new(
-        end: Option<(usize, char)>,
-        start: Option<(usize, char)>,
+        end: (usize, Option<char>),
+        start: (usize, Option<char>),
         settings: RenderSettings,
         hardblank: Hardblank,
     ) -> Self {
-        match (end, start) {
-            (None, None) => Self::BothBlank,
-            (None, Some((right_offset, _))) => Self::Overwrite {
-                start_offset: right_offset,
+        match (end.1, start.1) {
+            (None, _) => Self::Overwrite {
+                start_blanks: start.0,
             },
-            (Some((left_offset, _)), None) => Self::Keep {
-                end_offset: left_offset,
-            },
-            (Some((left_offset, left_char)), Some((right_offset, right_char))) => {
-                let smush = if settings.direction == PrintDirection::LeftToRight {
-                    settings
-                        .horizontal_layout
-                        .smush(left_char, right_char, hardblank)
-                } else {
-                    settings
-                        .horizontal_layout
-                        .smush(right_char, left_char, hardblank)
-                };
+            (_, None) => Self::Keep { end_blanks: end.0 },
+            (Some(end_char), Some(start_char)) => {
+                let smush = settings
+                    .horizontal_layout
+                    .smush(end_char, start_char, hardblank);
                 Self::Smush {
-                    end_offset: left_offset,
-                    start_offset: right_offset,
+                    end_blanks: end.0,
+                    start_blanks: start.0,
                     smush,
                 }
             }
@@ -394,14 +381,13 @@ impl RowSmush {
 
     fn shift(&self, end: usize, start: usize) -> usize {
         match self {
-            Self::BothBlank => end + start,
-            Self::Keep { end_offset } => end_offset + start,
-            Self::Overwrite { start_offset } => end + start_offset,
+            Self::Keep { end_blanks } => end_blanks + start,
+            Self::Overwrite { start_blanks } => end + start_blanks,
             Self::Smush {
-                end_offset: left_offset,
-                start_offset: right_offset,
+                end_blanks,
+                start_blanks,
                 smush,
-            } => left_offset + right_offset + usize::from(smush.is_some()),
+            } => end_blanks + start_blanks + usize::from(smush.is_some()),
         }
     }
 
@@ -413,7 +399,7 @@ impl RowSmush {
         direction: PrintDirection,
     ) {
         match self {
-            Self::BothBlank | Self::Keep { .. } => {
+            Self::Keep { .. } => {
                 if char_row.len() <= shift {
                     buffer_row.truncate(buffer_row.len() + char_row.len() - shift);
                 } else {
@@ -426,24 +412,38 @@ impl RowSmush {
                 buffer_row.extend(char_row.bidi_chars(direction).skip(skip));
             }
             &Self::Smush {
-                end_offset,
-                start_offset,
+                end_blanks,
+                start_blanks,
                 smush: Some(smush),
-            } if shift > (start_offset + end_offset) => {
+            } if shift > (start_blanks + end_blanks) => {
                 // shift == self.shift()
-                buffer_row.truncate(buffer_row.len() - end_offset - 1);
+                buffer_row.truncate(buffer_row.len() - end_blanks - 1);
                 buffer_row.push(smush);
-                buffer_row.extend(char_row.bidi_chars(direction).skip(start_offset + 1));
+                buffer_row.extend(char_row.bidi_chars(direction).skip(start_blanks + 1));
             }
-            &Self::Smush { start_offset, .. } => {
-                if shift <= start_offset {
+            &Self::Smush { start_blanks, .. } => {
+                if shift <= start_blanks {
                     buffer_row.extend(char_row.bidi_chars(direction).skip(shift));
                 } else {
-                    buffer_row.truncate(buffer_row.len() + start_offset - shift);
-                    buffer_row.extend(char_row.bidi_chars(direction).skip(start_offset));
+                    buffer_row.truncate(buffer_row.len() + start_blanks - shift);
+                    buffer_row.extend(char_row.bidi_chars(direction).skip(start_blanks));
                 }
             }
         }
+    }
+
+    fn count_blanks(chars: impl Iterator<Item = char>) -> (usize, Option<char>) {
+        let mut blanks = 0;
+        let mut next = None;
+        for c in chars {
+            if c == ' ' {
+                blanks += 1;
+            } else {
+                next = Some(c);
+                break;
+            }
+        }
+        (blanks, next)
     }
 }
 
@@ -569,7 +569,8 @@ impl ColumnSmush {
     }
 
     fn combine(&self, rows: &mut [Vec<char>], line: &[Vec<char>], i: usize, shift: usize) {
-        // this is mostly shift.saturating_sub(start_blanks).min(end_blanks) and its special cases
+        // this is mostly shift.saturating_sub(start_blanks).min(end_blanks) and the special case
+        // end_blanks when smushing occurs but it's not clear how to avoid the repetition
         let rows_to_overwrite = match self {
             Self::Keep { .. } => return,
             &Self::Overwrite { .. } => rows.len().min(shift),
