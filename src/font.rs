@@ -42,9 +42,9 @@ impl Font {
     /// decoding.
     ///
     /// See [`FontWarning`] for details on these warnings. Notably, if the font has FIGcharacters
-    /// that do not use the same number of utf8 codepoints per row, the rendering algorithm may
+    /// that do not use the same number of UTF-8 codepoints per row, the rendering algorithm may
     /// behave unexpectedly, but this is only emitted as a warning and not a fatal error. This is to
-    /// allow sub-characters with different utf8 length but the same visual width, although in that
+    /// allow sub-characters with different UTF-8 length but the same visual width, although in that
     /// case alignment will not work correctly.
     ///
     /// # Errors
@@ -166,7 +166,7 @@ impl Font {
     }
 
     /// A codepoint in a *code tag* may be positive, denoting an actual character, or negative,
-    /// signifying human readable information, usually translation tables. This is a convenience
+    /// signifying human-readable information, usually translation tables. This is a convenience
     /// function to parse such a codepoint, returning the absolute value and the sign (`true` if
     /// positive, `false` if negative) separately.
     pub(crate) fn parse_codepoint(codepoint: &str) -> Result<(u32, bool), FontError> {
@@ -209,9 +209,10 @@ impl FromStr for Font {
     /// If unsure about the input being a fully compliant FIGfont, consider
     /// [`Font::from_str_with_warnings`]; this method is (currently) a convenience wrapper around
     /// that, ignoring the warnings. Notably, if the font has FIGcharacters that do not use the same
-    /// number of utf8 codepoints per row, the rendering algorithm may behave unexpectedly, but this
-    /// is only emitted as a warning (when using [`Font::from_str_with_warnings`]) and not a fatal
-    /// error. This is to allow sub-characters with different utf8 length but the same visual width.
+    /// number of UTF-8 codepoints per row, the rendering algorithm may behave unexpectedly, but
+    /// this is only emitted as a warning (when using [`Font::from_str_with_warnings`]) and not a
+    /// fatal error. This is to allow sub-characters with different UTF-8 lengths but the same
+    /// visual width.
     ///
     /// # Errors
     /// See [`FontError`].
@@ -241,7 +242,7 @@ pub struct Header {
     /// Should be between 1 and [`height`](Header::height) inclusive; see
     /// [`FontWarning::BaselineOutOfRange`].
     pub baseline: usize,
-    /// The maximum (utf8) length of any row of a FIGcharacter. This should be the width of the
+    /// The maximum (UTF-8) length of any row of a FIGcharacter. This should be the width of the
     /// widest FIGcharacter, plus 2 (to accommodate *endmarks*); see [`FontWarning::ExcessLength`].
     pub max_length: usize,
     /// Number of lines of comments between the header and the FIGcharacters. See also
@@ -255,7 +256,7 @@ pub struct Header {
     pub print_direction: PrintDirection,
     /// Number of characters provided by the font outside of the standard 102 (see
     /// [`DEFAULT_CODEPOINTS`]), plus any tags with *negative* codes that do not correspond to
-    /// actual FIGcharacters but contain human readable information, usually translation tables. See
+    /// actual FIGcharacters but contain human-readable information, usually translation tables. See
     /// [`Font::ignored_characters`].
     pub code_tag_count: usize,
 }
@@ -503,7 +504,7 @@ pub enum FontWarning {
         codepoint: u32,
         /// The row number
         row: usize,
-        /// The utf8 length of a row that is too wide
+        /// The UTF-8 length of a row that is too wide
         length: usize,
         /// The maximum length of a row specified in the header
         max_length: usize,

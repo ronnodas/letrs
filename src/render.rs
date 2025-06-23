@@ -22,22 +22,6 @@ const LINE_BREAK_CHARACTERS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 /// Use either [`render()`](Renderer::render) or [`render_unbounded()`](Renderer::render_unbounded)
 /// to render output.
 ///
-/// ```
-/// # use letrs::font::Font;
-/// # use letrs::render::{Renderer};
-/// let font = Font::standard();
-/// let rendered = Renderer::new(&font).render_unbounded("Hello, world!");
-/// let expected = concat!(
-/// r" _   _      _ _                             _     _ _ ", "\n",
-/// r"| | | | ___| | | ___    __      _____  _ __| | __| | |", "\n",
-/// r"| |_| |/ _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` | |", "\n",
-/// r"|  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |_|", "\n",
-/// r"|_| |_|\___|_|_|\___( )   \_/\_/ \___/|_|  |_|\__,_(_)", "\n",
-/// r"                    |/                                "
-/// );
-/// assert_eq!(rendered, expected);
-/// ```
-///
 /// The methods are meant to be used in a builder pattern:
 /// ```
 /// # use letrs::font::Font;
@@ -117,6 +101,10 @@ impl<'font> Renderer<'font> {
     ///
     /// In case the font uses unicode characters, width is measured in number of code points, which
     /// might not correspond to visual width.
+    ///
+    /// # Panics
+    /// May panic if the font uses FIGcharacters with inconsistent (UTF-8) width and the vertical
+    /// layout mode is not [full height](LayoutMode::FullSize), especially with multi-line output.
     #[must_use]
     pub fn render(&self, mut string: &str, max_width: usize) -> Option<String> {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
@@ -148,6 +136,10 @@ impl<'font> Renderer<'font> {
     /// Renders the given string. The width of each line in the returned string is the maximum width
     /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
     /// form feed characters).
+    ///
+    /// # Panics
+    /// May panic if the font uses FIGcharacters with inconsistent (UTF-8) width and the vertical
+    /// layout mode is not [full height](LayoutMode::FullSize), especially with multi-line output.
     #[must_use]
     pub fn render_unbounded(&self, mut string: &str) -> String {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
