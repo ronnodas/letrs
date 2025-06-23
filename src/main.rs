@@ -1,11 +1,13 @@
+//! TODO
+
 use std::fmt::{self, Display};
 use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use letrs::render::{self, Renderer};
-use letrs::{Font, PrintDirection};
+use letrs::font::Font;
+use letrs::render::{PrintDirection, Renderer};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -90,7 +92,7 @@ enum Alignment {
     End,
 }
 
-impl From<Alignment> for render::Alignment {
+impl From<Alignment> for letrs::render::Alignment {
     fn from(value: Alignment) -> Self {
         match value {
             Alignment::Start => Self::Start,

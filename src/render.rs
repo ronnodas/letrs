@@ -1,34 +1,127 @@
+//! Renderer and rendering settings
+mod layout;
+
 use std::cmp::Ordering;
 use std::iter::repeat_n;
 use std::mem;
 
 use itertools::izip;
 
-use crate::layout::{HorizontalLayout, LayoutMode, VerticalLayout};
+use crate::font::{Font, Hardblank, Header, HeaderError};
 use crate::str_ext::StrExt as _;
-use crate::{Font, Hardblank, Header, PrintDirection};
+
+pub use layout::{
+    HorizontalLayout, HorizontalSmushing, Layout, LayoutMode, LayoutParseError, VerticalLayout,
+    VerticalSmushing,
+};
 
 const LINE_BREAK_CHARACTERS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 
-#[derive(Debug)]
+/// The main type for rendering
+///
+/// Use either [`render()`](Renderer::render) or [`render_unbounded()`](Renderer::render_unbounded)
+/// to render output.
+///
+/// ```
+/// # use letrs::font::Font;
+/// # use letrs::render::{Renderer};
+/// let font = Font::standard();
+/// let rendered = Renderer::new(&font).render_unbounded("Hello, world!");
+/// let expected = concat!(
+/// r" _   _      _ _                             _     _ _ ", "\n",
+/// r"| | | | ___| | | ___    __      _____  _ __| | __| | |", "\n",
+/// r"| |_| |/ _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` | |", "\n",
+/// r"|  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |_|", "\n",
+/// r"|_| |_|\___|_|_|\___( )   \_/\_/ \___/|_|  |_|\__,_(_)", "\n",
+/// r"                    |/                                "
+/// );
+/// assert_eq!(rendered, expected);
+/// ```
+///
+/// The methods are meant to be used in a builder pattern:
+/// ```
+/// # use letrs::font::Font;
+/// # use letrs::render::{Alignment, LayoutMode, PrintDirection, Renderer};
+/// let font = Font::standard();
+/// let rendered = Renderer::new(&font)
+///     .alignment(Alignment::Center)
+///     .print_direction(PrintDirection::RightToLeft)
+///     .horizontal_layout(LayoutMode::Fitting)
+///     .vertical_layout(LayoutMode::FullSize)
+///     .render_unbounded("Hello,\nworld!");
+/// let expected = concat!(
+/// r"             _  _        _   _    ", "\n",
+/// r"       ___  | || |  ___ | | | |   ", "\n",
+/// r"      / _ \ | || | / _ \| |_| |   ", "\n",
+/// r"    _| (_) || || ||  __/|  _  |   ", "\n",
+/// r"   ( )\___/ |_||_| \___||_| |_|   ", "\n",
+/// r"   |/                             ", "\n",
+/// r" _      _  _                      ", "\n",
+/// r"| |  __| || | _ __  ___ __      __", "\n",
+/// r"| | / _` || || '__|/ _ \\ \ /\ / /", "\n",
+/// r"|_|| (_| || || |  | (_) |\ V  V / ", "\n",
+/// r"(_) \__,_||_||_|   \___/  \_/\_/  ", "\n",
+/// r"                                  "
+/// );
+/// assert_eq!(rendered, expected);
+/// ```
+#[must_use]
+#[derive(Debug, Clone)]
 pub struct Renderer<'font> {
     font: &'font Font,
-    settings: RenderSettings,
+    config: Config,
 }
 
 impl<'font> Renderer<'font> {
-    #[must_use]
-    pub fn new(font: &'font Font) -> Self {
-        let settings = RenderSettings::from_header(font.header());
-        Self { font, settings }
+    /// Creates a new renderer. The default alignment is [`Alignment::Start`]; the rest of the
+    /// settings are taken from the font.
+    pub const fn new(font: &'font Font) -> Self {
+        let config = Config::from_header(font.header());
+        Self { font, config }
     }
 
+    /// Sets the print direction.
+    pub const fn print_direction(mut self, direction: PrintDirection) -> Self {
+        self.config.direction = direction;
+        self
+    }
+
+    /// Sets the alignment.
+    pub const fn alignment(mut self, alignment: Alignment) -> Self {
+        self.config.alignment = alignment;
+        self
+    }
+
+    /// Sets the horizontal layout mode.
+    pub const fn horizontal_layout(mut self, mode: LayoutMode) -> Self {
+        self.config.horizontal_layout.set_mode(mode);
+        self
+    }
+
+    /// Sets the vertical layout mode.
+    pub const fn vertical_layout(mut self, mode: LayoutMode) -> Self {
+        self.config.vertical_layout.set_mode(mode);
+        self
+    }
+
+    /// Renders the given string with the given maximum width.
+    ///
+    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate, the
+    /// recommended minimum for `max_width` is `font.header().max_length`.
+    ///
+    /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If a
+    /// line goes over `max_width` then it is broken at the last contiguous segment of whitespace
+    /// (spaces and tabs) on that line if any, in which case that segment of whitespace is not
+    /// rendered. Otherwise the line will be broken in the middle of a "word" (but never in the
+    /// middle of a FIGcharacter), at the latest possible position.
+    ///
+    /// In case the font uses unicode characters, width is measured in number of code points, which
+    /// might not correspond to visual width.
     #[must_use]
     pub fn render(&self, mut string: &str, max_width: usize) -> Option<String> {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
-        let width = max_width;
         while !string.is_empty() {
-            let (line, line_width, rest) = if self.settings.full_width() {
+            let (line, line_width, rest) = if self.config.full_width() {
                 self.render_line_full_width(string, Some(max_width))
             } else {
                 self.render_line(string, Some(max_width))
@@ -37,26 +130,30 @@ impl<'font> Renderer<'font> {
                 return None;
             }
             lines.push(line);
-            debug_assert!(line_width <= width, "rendered line too wide");
+            debug_assert!(line_width <= max_width, "rendered line too wide");
             string = rest;
         }
         for row in lines.iter_mut().flatten() {
             for c in row.iter_mut() {
-                if self.font.header.hardblank == *c {
+                if self.font.header().hardblank == *c {
                     *c = ' ';
                 }
             }
-            *row = self.settings.alignment.pad(mem::take(row), width);
+            *row = self.config.alignment.pad(mem::take(row), max_width);
         }
-        let rows = self.stack(lines, width);
+        let rows = self.stack(lines, max_width);
         Some(self.join(rows))
     }
 
-    pub(crate) fn render_unbounded(&self, mut string: &str) -> String {
+    /// Renders the given string. The width of each line in the returned string is the maximum width
+    /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
+    /// form feed characters).
+    #[must_use]
+    pub fn render_unbounded(&self, mut string: &str) -> String {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
         let mut width = 0;
         while !string.is_empty() {
-            let (line, line_width, rest) = if self.settings.full_width() {
+            let (line, line_width, rest) = if self.config.full_width() {
                 self.render_line_full_width(string, None)
             } else {
                 self.render_line(string, None)
@@ -67,32 +164,14 @@ impl<'font> Renderer<'font> {
         }
         for row in lines.iter_mut().flatten() {
             for c in row.iter_mut() {
-                if self.font.header.hardblank == *c {
+                if self.font.header().hardblank == *c {
                     *c = ' ';
                 }
             }
-            *row = self.settings.alignment.pad(mem::take(row), width);
+            *row = self.config.alignment.pad(mem::take(row), width);
         }
         let rows = self.stack(lines, width);
         self.join(rows)
-    }
-
-    #[must_use]
-    pub const fn print_direction(mut self, direction: PrintDirection) -> Self {
-        self.settings.direction = direction;
-        self
-    }
-
-    #[must_use]
-    pub const fn vertical_layout(mut self, mode: LayoutMode) -> Self {
-        self.settings.vertical_layout.set_mode(mode);
-        self
-    }
-
-    #[must_use]
-    pub const fn alignment(mut self, alignment: Alignment) -> Self {
-        self.settings.alignment = alignment;
-        self
     }
 
     fn render_line<'a>(
@@ -100,14 +179,15 @@ impl<'font> Renderer<'font> {
         mut string: &'a str,
         max_width: Option<usize>,
     ) -> (Vec<Vec<char>>, usize, &'a str) {
-        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
+        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header().height];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;
+        let mut saved = false;
         let mut overfull = false;
         while let Some(c) = chars.next() {
             let c = if c == '\t' { ' ' } else { c };
-            if c == ' ' {
+            if c == ' ' && !saved {
                 before_space = Some((line.clone(), width, string));
             }
             if LINE_BREAK_CHARACTERS.contains(&c) {
@@ -120,6 +200,9 @@ impl<'font> Renderer<'font> {
                 break;
             }
             string = chars.as_str();
+            if c != ' ' {
+                saved = false;
+            }
         }
         if overfull {
             if let Some(saved) = before_space {
@@ -154,14 +237,14 @@ impl<'font> Renderer<'font> {
         let char_rows_rev = character
             .rows
             .iter()
-            .map(|row| row.bidi_chars(self.settings.direction).rev());
+            .map(|row| row.bidi_chars(self.config.direction).rev());
         let trim = Self::trimming(char_rows_rev);
         if max_width.is_some_and(|max_width| *width + character.width - trim - shift > max_width) {
             return false;
         }
         *width = *width + character.width - shift;
         for (buffer_row, char_row, smush) in izip!(line, &character.rows, smush_data) {
-            smush.combine(shift, buffer_row, char_row, self.settings.direction);
+            smush.combine(shift, buffer_row, char_row, self.config.direction);
         }
         true
     }
@@ -171,15 +254,17 @@ impl<'font> Renderer<'font> {
         mut string: &'a str,
         max_width: Option<usize>,
     ) -> (Vec<Vec<char>>, usize, &'a str) {
-        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header.height];
+        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header().height];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;
+        let mut saved = false;
         let mut overfull = false;
         while let Some(c) = chars.next() {
             let c = if c == '\t' { ' ' } else { c };
-            if c == ' ' {
+            if c == ' ' && !saved {
                 before_space = Some((line.clone(), width, string));
+                saved = true;
             }
             if LINE_BREAK_CHARACTERS.contains(&c) {
                 string = chars.as_str();
@@ -194,10 +279,13 @@ impl<'font> Renderer<'font> {
             }
             width += character.width;
             for (buf_row, char_row) in line.iter_mut().zip(&character.rows) {
-                buf_row.extend(char_row.bidi_chars(self.settings.direction));
+                buf_row.extend(char_row.bidi_chars(self.config.direction));
             }
 
             string = chars.as_str();
+            if c != ' ' {
+                saved = false;
+            }
         }
         if overfull {
             if let Some(saved) = before_space {
@@ -214,8 +302,8 @@ impl<'font> Renderer<'font> {
             .zip(char_rows)
             .map(|(end, start)| {
                 let end = RowSmush::count_blanks(end.iter().rev().copied());
-                let start = RowSmush::count_blanks(start.bidi_chars(self.settings.direction));
-                RowSmush::new(end, start, self.settings, self.font.header.hardblank)
+                let start = RowSmush::count_blanks(start.bidi_chars(self.config.direction));
+                RowSmush::new(end, start, self.config, self.font.header().hardblank)
             })
             .collect()
     }
@@ -227,7 +315,7 @@ impl<'font> Renderer<'font> {
             if !first {
                 buffer.push('\n');
             }
-            if self.settings.direction == PrintDirection::LeftToRight {
+            if self.config.direction == PrintDirection::LeftToRight {
                 buffer.extend(row);
             } else {
                 buffer.extend(row.into_iter().rev());
@@ -239,7 +327,7 @@ impl<'font> Renderer<'font> {
 
     fn stack(&self, lines: Vec<Vec<Vec<char>>>, width: usize) -> Vec<Vec<char>> {
         let mut rows = Vec::new();
-        if self.settings.full_height() {
+        if self.config.full_height() {
             rows.extend(lines.into_iter().flatten());
         } else {
             for line in lines {
@@ -259,7 +347,7 @@ impl<'font> Renderer<'font> {
                 rows.extend(line.into_iter().skip(shift));
             }
         }
-        if !self.settings.full_height() {
+        if !self.config.full_height() {
             while rows.last().is_some_and(|row| row.iter().all(|&c| c == ' ')) {
                 drop(rows.pop());
             }
@@ -277,7 +365,7 @@ impl<'font> Renderer<'font> {
             .map(|i| {
                 let end_counts = BlanksAndBars::count(end.iter().rev().map(|row| row[i]));
                 let start_counts = BlanksAndBars::count(start.iter().map(|row| row[i]));
-                ColumnSmush::new(&end_counts, &start_counts, self.settings.vertical_layout)
+                ColumnSmush::new(&end_counts, &start_counts, self.config.vertical_layout)
             })
             .collect()
     }
@@ -290,51 +378,52 @@ impl<'font> Renderer<'font> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct RenderSettings {
-    horizontal_layout: HorizontalLayout,
-    vertical_layout: VerticalLayout,
-    direction: PrintDirection,
-    alignment: Alignment,
+/// Printing direction, left-to-right or right-to-left
+///
+/// Each font specifies a default, found in `font.header().print_direction`. This also affects the
+/// meaning of [`Alignment`].
+///
+/// The rendered string should always be interpreted left-to-right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintDirection {
+    /// Left-to-right
+    LeftToRight,
+    /// Right-to-left
+    RightToLeft,
 }
 
-impl RenderSettings {
-    fn from_header(header: &Header) -> Self {
-        Self {
-            horizontal_layout: header.horizontal_layout,
-            vertical_layout: header.vertical_layout,
-            direction: header.print_direction,
-            alignment: Alignment::default(),
-        }
-    }
-
-    fn full_width(self) -> bool {
-        self.horizontal_layout.mode() == LayoutMode::FullSize
-    }
-
-    fn full_height(self) -> bool {
-        self.vertical_layout.mode() == LayoutMode::FullSize
+impl PrintDirection {
+    pub(crate) fn parse(print_direction: Option<&str>) -> Result<Self, HeaderError> {
+        Ok(match print_direction {
+            None | Some("0") => Self::LeftToRight,
+            Some("1") => Self::RightToLeft,
+            Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
+        })
     }
 }
 
-/// The choice of rendering alignment.
+/// The choice of rendering alignment
 ///
-/// The alignment is defined relative to the printing direction,
-/// so [`Alignment::Start`] will align text on the left if printing left-to-right and on the right if
-/// printing right-to-left.
+/// The alignment is defined relative to the printing direction, so [`Alignment::Start`] will align
+/// text on the left if printing left-to-right and on the right if printing right-to-left. The
+/// opposite for [`Alignment::End`].
 ///
-/// This is only relevant if a maximum width is set or if rendering text with line breaks.
-///
-/// When the line width and the rendered text width have different parity (i.e. one is odd and the
-/// other is even), [`Alignment::Center`] rounds so that there's one fewer blank in the 'start'
-/// direction than the 'end'.
+/// The alignment only relevant if a maximum width is set or when rendering text with line breaking
+/// characters (newline, carriage return, vertical tab, and form feed).
 ///
 /// The default is [`Alignment::Start`].
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Alignment {
+    /// Left align if rendering [left-to-right](PrintDirection::LeftToRight), right align if
+    /// rendering [right-to-left](PrintDirection::RightToLeft). This is the default.
     #[default]
     Start,
+    /// Center align. This is still affected by [`PrintDirection`]: if the final width and the width
+    /// required to render a given line have different parity (i.e. one is odd and the other is
+    /// even), the extra padding is rounded so that there's one fewer blank towards the *start*.
     Center,
+    /// Right align if rendering [left-to-right](PrintDirection::LeftToRight), left align if
+    /// rendering [right-to-left](PrintDirection::RightToLeft).
     End,
 }
 
@@ -360,6 +449,33 @@ impl Alignment {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Config {
+    horizontal_layout: HorizontalLayout,
+    vertical_layout: VerticalLayout,
+    direction: PrintDirection,
+    alignment: Alignment,
+}
+
+impl Config {
+    const fn from_header(header: &Header) -> Self {
+        Self {
+            horizontal_layout: header.horizontal_layout,
+            vertical_layout: header.vertical_layout,
+            direction: header.print_direction,
+            alignment: Alignment::Start,
+        }
+    }
+
+    fn full_width(self) -> bool {
+        self.horizontal_layout.mode() == LayoutMode::FullSize
+    }
+
+    fn full_height(self) -> bool {
+        self.vertical_layout.mode() == LayoutMode::FullSize
+    }
+}
+
 #[derive(Debug)]
 enum RowSmush {
     Keep {
@@ -379,7 +495,7 @@ impl RowSmush {
     fn new(
         end: (usize, Option<char>),
         start: (usize, Option<char>),
-        settings: RenderSettings,
+        config: Config,
         hardblank: Hardblank,
     ) -> Self {
         match (end.1, start.1) {
@@ -388,7 +504,7 @@ impl RowSmush {
             },
             (_, None) => Self::Keep { end_blanks: end.0 },
             (Some(end_char), Some(start_char)) => {
-                let smush = settings
+                let smush = config
                     .horizontal_layout
                     .smush(end_char, start_char, hardblank);
                 Self::Smush {
@@ -700,10 +816,12 @@ impl BlanksAndBars {
 }
 
 #[cfg(test)]
-mod test {
-    use crate::{Font, PrintDirection};
+pub(crate) mod test {
+    use crate::font::Font;
 
-    use super::{Alignment, Renderer};
+    use super::{Alignment, PrintDirection, Renderer};
+
+    pub(crate) use super::layout::test::{check_horizontal_standard, check_vertical_standard};
 
     #[test]
     fn hello() {
@@ -713,18 +831,6 @@ mod test {
 | '_ \ / _ \ | |/ _ \ 
 | | | |  __/ | | (_) |
 |_| |_|\___|_|_|\___/ ";
-        assert_eq!(rendered, expected);
-    }
-
-    #[test]
-    fn hello_world() {
-        let rendered = Font::standard().render("Hello, world!");
-        let expected = r" _   _      _ _                             _     _ _ 
-| | | | ___| | | ___    __      _____  _ __| | __| | |
-| |_| |/ _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` | |
-|  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |_|
-|_| |_|\___|_|_|\___( )   \_/\_/ \___/|_|  |_|\__,_(_)
-                    |/                                ";
         assert_eq!(rendered, expected);
     }
 
@@ -797,6 +903,7 @@ mod test {
         let rendered = Renderer::new(&Font::standard())
             .render("floccinaucinihilipilification", 80)
             .unwrap();
+
         let expected = r"  __ _                _                        _       _ _     _ _ _       _ _  
  / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)_ __ (_) |__ (_) (_)_ __ (_) | 
 | |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| | '_ \| | '_ \| | | | '_ \| | | 

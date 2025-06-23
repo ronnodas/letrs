@@ -1,6 +1,6 @@
 use std::str::Chars;
 
-use crate::PrintDirection;
+use crate::render::PrintDirection;
 
 pub(crate) trait StrExt {
     fn last(&self) -> Option<char>;

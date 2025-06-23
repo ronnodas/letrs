@@ -1,9 +1,7 @@
-//! Layout parameters
-
 use enumset::{EnumSet, EnumSetType};
 use thiserror::Error;
 
-use crate::Hardblank;
+use crate::font::Hardblank;
 
 /// Combination of a layout mode and a set of horizontal smushing modes
 pub type HorizontalLayout = Layout<HorizontalSmushing>;
@@ -82,7 +80,7 @@ impl HorizontalLayout {
     /// neither of bits 6 and 7 are set, [`LayoutMode::FullSize`] is implied.
     ///
     /// ```
-    /// # use letrs::layout::{HorizontalLayout, HorizontalSmushing, LayoutMode};
+    /// # use letrs::render::{HorizontalLayout, HorizontalSmushing, LayoutMode};
     /// let layout = HorizontalLayout::parse(0b001111, Some(0b0101_1111_1000_1111)).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::Smushing);
     ///
@@ -181,7 +179,7 @@ impl VerticalLayout {
     /// neither of bits 6 and 7 are set, [`LayoutMode::FullSize`] is implied.
     ///
     /// ```
-    /// # use letrs::layout::{VerticalLayout, VerticalSmushing, LayoutMode};
+    /// # use letrs::render::{VerticalLayout, VerticalSmushing, LayoutMode};
     /// let layout = VerticalLayout::parse(Some(0b0101_1111_1000_1111)).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::Smushing);
     ///
@@ -196,7 +194,7 @@ impl VerticalLayout {
     /// smushing* in case the layout mode is overridden via
     /// [`Renderer::vertical_layout`](crate::render::Renderer::vertical_layout)).
     /// ```
-    /// # use letrs::layout::{VerticalLayout, VerticalSmushing, LayoutMode};
+    /// # use letrs::render::{VerticalLayout, VerticalSmushing, LayoutMode};
     /// let layout = VerticalLayout::parse(None).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::FullSize);
     /// ```
@@ -424,9 +422,7 @@ pub enum LayoutParseError {
 pub(crate) mod test {
     use enumset::EnumSet;
 
-    use crate::layout::HorizontalSmushing;
-
-    use super::{HorizontalLayout, LayoutMode, VerticalLayout};
+    use super::{HorizontalLayout, HorizontalSmushing, LayoutMode, VerticalLayout};
 
     pub(crate) fn check_horizontal_standard(layout: HorizontalLayout) {
         assert_eq!(layout.mode, LayoutMode::Smushing);
