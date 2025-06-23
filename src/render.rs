@@ -11,7 +11,7 @@ use crate::font::{Font, Hardblank, Header, HeaderError};
 use crate::str_ext::StrExt as _;
 
 pub use layout::{
-    HorizontalLayout, HorizontalSmushing, Layout, LayoutMode, LayoutParseError, VerticalLayout,
+    HorizontalLayout, HorizontalSmushing, Layout, LayoutDecodeError, LayoutMode, VerticalLayout,
     VerticalSmushing,
 };
 
@@ -393,7 +393,7 @@ pub enum PrintDirection {
 }
 
 impl PrintDirection {
-    pub(crate) fn parse(print_direction: Option<&str>) -> Result<Self, HeaderError> {
+    pub(crate) fn decode(print_direction: Option<&str>) -> Result<Self, HeaderError> {
         Ok(match print_direction {
             None | Some("0") => Self::LeftToRight,
             Some("1") => Self::RightToLeft,
@@ -419,8 +419,8 @@ pub enum Alignment {
     #[default]
     Start,
     /// Center align. This is still affected by [`PrintDirection`]: if the final width and the width
-    /// required to render a given line have different parity (i.e. one is odd and the other is
-    /// even), the extra padding is rounded so that there's one fewer blank towards the *start*.
+    /// required to render a given line have different parity (ie one is odd and the other is even),
+    /// the extra padding is rounded so that there's one fewer blank towards the *start*.
     Center,
     /// Right align if rendering [left-to-right](PrintDirection::LeftToRight), left align if
     /// rendering [right-to-left](PrintDirection::RightToLeft).

@@ -51,7 +51,7 @@ impl<S: EnumSetType> Layout<S> {
 }
 
 impl HorizontalLayout {
-    /// Parse the layout parameters and return a [`HorizontalLayout`].
+    /// Decode the layout parameters and return a [`HorizontalLayout`].
     ///
     /// This only uses the *low* byte of `full_layout` (if available). In more detail, `old_layout`
     /// should be either `-1`, signifying [`LayoutMode::FullSize`], or its bits correspond to:
@@ -81,7 +81,7 @@ impl HorizontalLayout {
     ///
     /// ```
     /// # use letrs::render::{HorizontalLayout, HorizontalSmushing, LayoutMode};
-    /// let layout = HorizontalLayout::parse(0b001111, Some(0b0101_1111_1000_1111)).unwrap();
+    /// let layout = HorizontalLayout::decode(0b001111, Some(0b0101_1111_1000_1111)).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::Smushing);
     ///
     /// assert!(layout.smushing_mode_active(HorizontalSmushing::EqualCharacter)); // active
@@ -93,28 +93,28 @@ impl HorizontalLayout {
     /// ```
     ///
     /// # Errors
-    /// See [`LayoutParseError`] for possible errors.
+    /// See [`LayoutDecodeError`] for possible errors.
     ///
     /// This function does not check that `full_layout <= 32767`.
     #[expect(clippy::missing_panics_doc, reason = "cannot actually panic")]
-    pub fn parse(old_layout: i8, full_layout: Option<u16>) -> Result<Self, LayoutParseError> {
+    pub fn decode(old_layout: i8, full_layout: Option<u16>) -> Result<Self, LayoutDecodeError> {
         let layout = if let Some(full_layout) = full_layout {
             let [_, low] = full_layout.to_be_bytes();
-            let default_mode = LayoutMode::parse(low >> 6).expect("u8 >> 6 is in 0..=3");
+            let default_mode = LayoutMode::decode(low >> 6).expect("u8 >> 6 is in 0..=3");
             match (old_layout, default_mode) {
                 (0..=63, LayoutMode::Smushing)
                 | (0, LayoutMode::Fitting)
                 | (-1, LayoutMode::FullSize) => (),
                 (-1..=63, _) => {
-                    return Err(LayoutParseError::Inconsistent(old_layout, full_layout));
+                    return Err(LayoutDecodeError::Inconsistent(old_layout, full_layout));
                 }
-                _ => return Err(LayoutParseError::InvalidOld(old_layout)),
+                _ => return Err(LayoutDecodeError::InvalidOld(old_layout)),
             }
             let smushing =
                 if old_layout >= 0 && u16::from(old_layout.cast_unsigned()) == full_layout & 63 {
-                    HorizontalSmushing::parse(old_layout.cast_unsigned())
+                    HorizontalSmushing::decode(old_layout.cast_unsigned())
                 } else {
-                    return Err(LayoutParseError::Inconsistent(old_layout, full_layout));
+                    return Err(LayoutDecodeError::Inconsistent(old_layout, full_layout));
                 };
             Self {
                 mode: default_mode,
@@ -131,13 +131,13 @@ impl HorizontalLayout {
                     smushing: EnumSet::empty(),
                 },
                 1..=63 => {
-                    let smushing = HorizontalSmushing::parse(old_layout.cast_unsigned());
+                    let smushing = HorizontalSmushing::decode(old_layout.cast_unsigned());
                     Self {
                         mode: LayoutMode::Smushing,
                         smushing,
                     }
                 }
-                _ => return Err(LayoutParseError::InvalidOld(old_layout)),
+                _ => return Err(LayoutDecodeError::InvalidOld(old_layout)),
             }
         };
         Ok(layout)
@@ -162,7 +162,7 @@ impl HorizontalLayout {
 }
 
 impl VerticalLayout {
-    /// Parse the layout parameters and return a [`VerticalLayout`].
+    /// Decode the `full_layout` parameter and return a [`VerticalLayout`].
     ///
     /// This only uses the *high* byte of `full_layout` (if `Some`). In more detail, the high 8 bits
     /// of `full_layout` correspond to:
@@ -180,7 +180,7 @@ impl VerticalLayout {
     ///
     /// ```
     /// # use letrs::render::{VerticalLayout, VerticalSmushing, LayoutMode};
-    /// let layout = VerticalLayout::parse(Some(0b0101_1111_1000_1111)).unwrap();
+    /// let layout = VerticalLayout::decode(Some(0b0101_1111_1000_1111)).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::Smushing);
     ///
     /// assert!(layout.smushing_mode_active(VerticalSmushing::EqualCharacter));    // active
@@ -195,18 +195,18 @@ impl VerticalLayout {
     /// [`Renderer::vertical_layout`](crate::render::Renderer::vertical_layout)).
     /// ```
     /// # use letrs::render::{VerticalLayout, VerticalSmushing, LayoutMode};
-    /// let layout = VerticalLayout::parse(None).unwrap();
+    /// let layout = VerticalLayout::decode(None).unwrap();
     /// assert_eq!(layout.mode(), LayoutMode::FullSize);
     /// ```
     ///
     /// # Errors
-    /// Can only emit [`LayoutParseError::InvalidFull`], precisely when `full_layout > 32767`.
-    pub fn parse(full_layout: Option<u16>) -> Result<Self, LayoutParseError> {
+    /// Can only emit [`LayoutDecodeError::InvalidFull`], precisely when `full_layout > 32767`.
+    pub fn decode(full_layout: Option<u16>) -> Result<Self, LayoutDecodeError> {
         let full_layout = full_layout.unwrap_or(0);
         let [high, _] = full_layout.to_be_bytes();
         let default_mode =
-            LayoutMode::parse(high >> 5).ok_or(LayoutParseError::InvalidFull(full_layout))?;
-        let smushing = VerticalSmushing::parse(high);
+            LayoutMode::decode(high >> 5).ok_or(LayoutDecodeError::InvalidFull(full_layout))?;
+        let smushing = VerticalSmushing::decode(high);
         Ok(Self {
             mode: default_mode,
             smushing,
@@ -255,7 +255,7 @@ pub enum LayoutMode {
 }
 
 impl LayoutMode {
-    const fn parse(two_bits: u8) -> Option<Self> {
+    const fn decode(two_bits: u8) -> Option<Self> {
         match two_bits {
             0 => Some(Self::FullSize),
             1 => Some(Self::Fitting),
@@ -297,7 +297,7 @@ pub enum HorizontalSmushing {
 }
 
 impl HorizontalSmushing {
-    fn parse(old_layout: u8) -> EnumSet<Self> {
+    fn decode(old_layout: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(old_layout)
     }
 
@@ -359,7 +359,7 @@ pub enum VerticalSmushing {
 }
 
 impl VerticalSmushing {
-    fn parse(high: u8) -> EnumSet<Self> {
+    fn decode(high: u8) -> EnumSet<Self> {
         EnumSet::from_repr_truncated(high)
     }
 
@@ -396,18 +396,19 @@ fn hierarchy(a: char, b: char) -> Option<char> {
     .then_some(b)
 }
 
-/// Errors that can occur when parsing layout parameters
+/// Errors that can occur when decoding layout parameters
 ///
 /// Depending on the font encoding version, two parameters `Old_Layout` and `Full_Layout` are
 /// considered, each encoding a set of flags as bits (except when `Old_Layout = -1`).
 ///
-/// See [`HorizontalLayout::parse`] and [`VerticalLayout::parse`] for more details on the encoding.
+/// See [`HorizontalLayout::decode`] and [`VerticalLayout::decode`] for more details on the
+/// encoding.
 #[derive(Error, Debug)]
-pub enum LayoutParseError {
+pub enum LayoutDecodeError {
     /// The two parameters describe inconsistent layout modes.
     ///
-    /// This is only relevant for parsing a [`HorizontalLayout`], since `Old_Layout` does not contain
-    /// information about [`VerticalLayout`].
+    /// This is only relevant for decoding a [`HorizontalLayout`], since `Old_Layout` does not
+    /// contain information about [`VerticalLayout`].
     #[error("inconsistent layout parameters: {0} and {1}")]
     Inconsistent(i8, u16),
     /// The `Old_Layout` parameter is outside the range `-1..=63`.

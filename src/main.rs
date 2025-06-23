@@ -17,14 +17,14 @@ fn main() -> Result<()> {
         println!("{output}");
     } else {
         debug_assert!(
-            warnings || cli.width < font.header().max_length,
+            warnings || cli.width + 2 < font.header().max_length,
             "rendering failed even though char width {} <= max width {}",
-            font.header().max_length,
+            font.header().max_length.saturating_sub(2),
             cli.width
         );
         println!(
             "Given width is too short, recommend at least {} for the given font",
-            font.header().max_length
+            font.header().max_length.saturating_sub(2)
         );
     }
     Ok(())
@@ -46,7 +46,7 @@ struct Cli {
 impl Cli {
     fn font(&self) -> Result<(Font, bool)> {
         let result = if let Some(path) = &self.font {
-            let (font, warnings) = Font::parse_strict(&fs::read_to_string(path)?)?;
+            let (font, warnings) = Font::from_str_with_warnings(&fs::read_to_string(path)?)?;
             let any_warnings = !warnings.is_empty();
             for warning in warnings {
                 println!("WARNING: {warning}");
