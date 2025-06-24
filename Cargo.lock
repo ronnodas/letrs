@@ -202,11 +202,18 @@ dependencies = [
 name = "letrs"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "clap",
  "enumset",
  "itertools",
  "thiserror",
+]
+
+[[package]]
+name = "letrs-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "letrs",
 ]
 
 [[package]]
