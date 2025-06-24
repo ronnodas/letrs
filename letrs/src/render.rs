@@ -88,13 +88,13 @@ impl<'font> Renderer<'font> {
         self
     }
 
-    /// Renders the given string with the given maximum width.
+    /// Renders the given string with the given width.
     ///
-    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate, the
-    /// recommended minimum for `max_width` is `font.header().max_length`.
+    /// Returns `None` if `width` is too short. Assuming the font header is accurate, the
+    /// recommended minimum for `width` is `font.header().max_length - 2`.
     ///
     /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If a
-    /// line goes over `max_width` then it is broken at the last contiguous segment of whitespace
+    /// line goes over `width` then it is broken at the last contiguous segment of whitespace
     /// (spaces and tabs) on that line if any, in which case that segment of whitespace is not
     /// rendered. Otherwise the line will be broken in the middle of a "word" (but never in the
     /// middle of a FIGcharacter), at the latest possible position.
@@ -102,19 +102,19 @@ impl<'font> Renderer<'font> {
     /// In case the font uses unicode characters, width is measured in number of code points, which
     /// might not correspond to visual width.
     #[must_use]
-    pub fn render(&self, mut string: &str, max_width: usize) -> Option<String> {
+    pub fn render(&self, mut string: &str, width: usize) -> Option<String> {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
         while !string.is_empty() {
             let (line, line_width, rest) = if self.config.full_width() {
-                self.render_line_full_width(string, Some(max_width))
+                self.render_line_full_width(string, Some(width))
             } else {
-                self.render_line(string, Some(max_width))
+                self.render_line(string, Some(width))
             };
             if rest == string {
                 return None;
             }
             lines.push(line);
-            debug_assert!(line_width <= max_width, "rendered line too wide");
+            debug_assert!(line_width <= width, "rendered line too wide");
             string = rest;
         }
         for row in lines.iter_mut().flatten() {
@@ -123,9 +123,9 @@ impl<'font> Renderer<'font> {
                     *c = ' ';
                 }
             }
-            *row = self.config.alignment.pad(mem::take(row), max_width);
+            *row = self.config.alignment.pad(mem::take(row), width);
         }
-        let rows = self.stack(lines, max_width);
+        let rows = self.stack(lines, width);
         Some(self.join(rows))
     }
 
