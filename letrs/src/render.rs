@@ -101,10 +101,6 @@ impl<'font> Renderer<'font> {
     ///
     /// In case the font uses unicode characters, width is measured in number of code points, which
     /// might not correspond to visual width.
-    ///
-    /// # Panics
-    /// May panic if the font uses FIGcharacters with inconsistent (UTF-8) width and the vertical
-    /// layout mode is not [full height](LayoutMode::FullSize), especially with multi-line output.
     #[must_use]
     pub fn render(&self, mut string: &str, max_width: usize) -> Option<String> {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
@@ -136,10 +132,6 @@ impl<'font> Renderer<'font> {
     /// Renders the given string. The width of each line in the returned string is the maximum width
     /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
     /// form feed characters).
-    ///
-    /// # Panics
-    /// May panic if the font uses FIGcharacters with inconsistent (UTF-8) width and the vertical
-    /// layout mode is not [full height](LayoutMode::FullSize), especially with multi-line output.
     #[must_use]
     pub fn render_unbounded(&self, mut string: &str) -> String {
         let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
@@ -323,6 +315,10 @@ impl<'font> Renderer<'font> {
             rows.extend(lines.into_iter().flatten());
         } else {
             for line in lines {
+                debug_assert!(
+                    line.iter().all(|row| row.len() >= width),
+                    "insufficient padding"
+                );
                 // Performance-wise, it might be better to transpose rows and line
                 let smush_data = self.column_smush_data(&rows, &line, width);
                 let shift = smush_data

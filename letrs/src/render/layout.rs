@@ -110,12 +110,10 @@ impl HorizontalLayout {
                 }
                 _ => return Err(LayoutDecodeError::InvalidOld(old_layout)),
             }
-            let smushing =
-                if old_layout >= 0 && u16::from(old_layout.cast_unsigned()) == full_layout & 63 {
-                    HorizontalSmushing::decode(old_layout.cast_unsigned())
-                } else {
-                    return Err(LayoutDecodeError::Inconsistent(old_layout, full_layout));
-                };
+            let smushing = match u8::try_from(old_layout) {
+                Ok(smushing) if smushing == low & 63 => HorizontalSmushing::decode(smushing),
+                _ => return Err(LayoutDecodeError::Inconsistent(old_layout, full_layout)),
+            };
             Self {
                 mode: default_mode,
                 smushing,
@@ -131,7 +129,7 @@ impl HorizontalLayout {
                     smushing: EnumSet::empty(),
                 },
                 1..=63 => {
-                    let smushing = HorizontalSmushing::decode(old_layout.cast_unsigned());
+                    let smushing = HorizontalSmushing::decode(old_layout.unsigned_abs());
                     Self {
                         mode: LayoutMode::Smushing,
                         smushing,
@@ -297,8 +295,8 @@ pub enum HorizontalSmushing {
 }
 
 impl HorizontalSmushing {
-    fn decode(old_layout: u8) -> EnumSet<Self> {
-        EnumSet::from_repr_truncated(old_layout)
+    fn decode(bits: u8) -> EnumSet<Self> {
+        EnumSet::from_repr_truncated(bits)
     }
 
     fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
@@ -359,8 +357,8 @@ pub enum VerticalSmushing {
 }
 
 impl VerticalSmushing {
-    fn decode(high: u8) -> EnumSet<Self> {
-        EnumSet::from_repr_truncated(high)
+    fn decode(bits: u8) -> EnumSet<Self> {
+        EnumSet::from_repr_truncated(bits)
     }
 
     fn smush(self, end: char, start: char) -> Option<char> {
