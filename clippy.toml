@@ -1,0 +1,10 @@
+allow-unwrap-in-tests = true
+doc-valid-idents = [
+    "FIGlet",
+    "FIGcharacter",
+    "FIGcharacters",
+    "FIGfont",
+    "FIGfonts",
+    "TOIlet",
+    "..",
+]
