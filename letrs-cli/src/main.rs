@@ -1,3 +1,7 @@
+//! CLI for the `letrs` library
+//! 
+//! Run as `letrs input` for default settings or use `letrs --help` to see options.
+
 use std::fmt::{self, Display};
 use std::fs;
 use std::path::PathBuf;
