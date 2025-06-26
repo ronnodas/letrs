@@ -32,14 +32,14 @@ fn main() -> Result<()> {
     };
     if !success {
         debug_assert!(
-            warnings || cli.width + 2 < font.header().max_length,
+            warnings || cli.width + 2 < font.max_width(),
             "rendering failed even though char width {} <= max width {}",
-            font.header().max_length.saturating_sub(2),
+            font.max_width(),
             cli.width
         );
-        println!(
+        eprintln!(
             "Given width is too short, recommend at least {} for the given font",
-            font.header().max_length.saturating_sub(2)
+            font.max_width()
         );
     }
     Ok(())

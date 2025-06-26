@@ -34,6 +34,7 @@ pub struct Font {
     characters: HashMap<u32, Character>,
     code_tagged_characters: HashMap<u32, String>,
     ignored_characters: HashMap<u32, String>,
+    max_width: usize,
     is_utf8: bool,
 }
 
@@ -89,6 +90,7 @@ impl Font {
             characters: HashMap::new(),
             code_tagged_characters: HashMap::new(),
             ignored_characters: HashMap::new(),
+            max_width: 0,
             is_utf8: true,
         };
         font.decode_characters(&mut lines, &mut warnings)?;
@@ -209,6 +211,7 @@ impl Font {
                 expected: self.header.code_tag_count,
             });
         }
+        self.max_width = self.characters.values().map(|c| c.width).max().unwrap_or(0);
         self.is_utf8 = self.characters.values().all(|c| c.is_utf8);
         Ok(())
     }
@@ -249,6 +252,12 @@ impl Font {
             .get(&u32::from(char))
             .or_else(|| self.characters.get(&0))
     }
+
+    /// The maximum width of any FIGcharacter in this font, measured in sub-characters (bytes).
+    #[must_use]
+    pub const fn max_width(&self) -> usize {
+        self.max_width
+    }
 }
 
 /// A FIGfont header.
@@ -272,8 +281,9 @@ pub struct Header {
     /// Should be between 1 and [`height`](Header::height) inclusive; see
     /// [`FontWarning::BaselineOutOfRange`].
     pub baseline: usize,
-    /// The maximum length of any row of a FIGcharacter. This should be the width of the widest
-    /// FIGcharacter, plus 2 (to accommodate *endmarks*); see [`FontWarning::ExcessLength`].
+    /// An upper bound for the length of each row of each FIGcharacter in the font. This is expected
+    /// to be the width of the widest FIGcharacter, plus 2 (to accommodate *endmarks*); see
+    /// [`FontWarning::ExcessLength`]. Use [`Font::max_width`] if you need the actual maximum width.
     pub max_length: usize,
     /// Number of lines of comments between the header and the FIGcharacters. See also
     /// [`Font::comments`].
