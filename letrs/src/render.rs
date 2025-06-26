@@ -8,14 +8,14 @@ use std::mem;
 use itertools::izip;
 
 use crate::font::{Font, Hardblank, Header, HeaderError};
-use crate::str_ext::StrExt as _;
+use crate::str_ext::BStrExt as _;
 
 pub use layout::{
     HorizontalLayout, HorizontalSmushing, Layout, LayoutDecodeError, LayoutMode, VerticalLayout,
     VerticalSmushing,
 };
 
-const LINE_BREAK_CHARACTERS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
+const LINE_BREAKS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 
 /// The main type for rendering
 ///
@@ -49,7 +49,6 @@ const LINE_BREAK_CHARACTERS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 /// );
 /// assert_eq!(rendered, expected);
 /// ```
-#[must_use]
 #[derive(Debug, Clone)]
 pub struct Renderer<'font> {
     font: &'font Font,
@@ -59,30 +58,35 @@ pub struct Renderer<'font> {
 impl<'font> Renderer<'font> {
     /// Creates a new renderer. The default alignment is [`Alignment::Start`]; the rest of the
     /// settings are taken from the font.
+    #[must_use]
     pub const fn new(font: &'font Font) -> Self {
         let config = Config::from_header(font.header());
         Self { font, config }
     }
 
     /// Sets the print direction.
+    #[must_use]
     pub const fn print_direction(mut self, direction: PrintDirection) -> Self {
         self.config.direction = direction;
         self
     }
 
     /// Sets the alignment.
+    #[must_use]
     pub const fn alignment(mut self, alignment: Alignment) -> Self {
         self.config.alignment = alignment;
         self
     }
 
     /// Sets the horizontal layout mode.
+    #[must_use]
     pub const fn horizontal_layout(mut self, mode: LayoutMode) -> Self {
         self.config.horizontal_layout.set_mode(mode);
         self
     }
 
     /// Sets the vertical layout mode.
+    #[must_use]
     pub const fn vertical_layout(mut self, mode: LayoutMode) -> Self {
         self.config.vertical_layout.set_mode(mode);
         self
@@ -90,37 +94,57 @@ impl<'font> Renderer<'font> {
 
     /// Renders the given string with the given width.
     ///
-    /// Returns `None` if `width` is too short. Assuming the font header is accurate, the
-    /// recommended minimum for `width` is `font.header().max_length - 2`.
+    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate (see
+    /// [`FontWarning::ExcessLength`](crate::font::FontWarning::ExcessLength)), the recommended
+    /// minimum for `max_width` is `font.header().max_length - 2`. .
     ///
     /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If a
-    /// line goes over `width` then it is broken at the last contiguous segment of whitespace
+    /// line goes over `max_width` then it is broken at the last contiguous segment of whitespace
     /// (spaces and tabs) on that line if any, in which case that segment of whitespace is not
     /// rendered. Otherwise the line will be broken in the middle of a "word" (but never in the
     /// middle of a FIGcharacter), at the latest possible position.
     ///
-    /// In case the font uses unicode characters, width is measured in number of code points, which
-    /// might not correspond to visual width.
+    /// In case the font uses characters that are not valid UTF-8 (which you can check using
+    /// [`Font::is_utf8`]), consider using [`render_bytes()`](Renderer::render_bytes) instead. This
+    /// method is a convenience wrapper around it using [`String::from_utf8_lossy`].
     #[must_use]
-    pub fn render(&self, mut string: &str, width: usize) -> Option<String> {
-        let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
+    pub fn render(&self, string: &str, max_width: usize) -> Option<String> {
+        self.render_bytes(string, max_width)
+            .map(|output| String::from_utf8_lossy(&output).into_owned())
+    }
+
+    /// Renders the given string with the given width as a sequence of bytes.
+    ///
+    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate, the
+    /// recommended minimum for `max_width` is `font.header().max_length - 2`.
+    ///
+    /// See [`render()`](Renderer::render) for details on line breaking.
+    #[must_use]
+    pub fn render_bytes(&self, mut string: &str, max_width: usize) -> Option<Vec<u8>> {
+        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
+        let mut width = if self.config.alignment == Alignment::Start {
+            0
+        } else {
+            max_width
+        };
         while !string.is_empty() {
             let (line, line_width, rest) = if self.config.full_width() {
-                self.render_line_full_width(string, Some(width))
+                self.render_line_full_width(string, Some(max_width))
             } else {
-                self.render_line(string, Some(width))
+                self.render_line(string, Some(max_width))
             };
             if rest == string {
                 return None;
             }
             lines.push(line);
-            debug_assert!(line_width <= width, "rendered line too wide");
+            debug_assert!(line_width <= max_width, "rendered line too wide");
+            width = width.max(line_width);
             string = rest;
         }
         for row in lines.iter_mut().flatten() {
             for c in row.iter_mut() {
                 if self.font.header().hardblank == *c {
-                    *c = ' ';
+                    *c = b' ';
                 }
             }
             *row = self.config.alignment.pad(mem::take(row), width);
@@ -132,9 +156,22 @@ impl<'font> Renderer<'font> {
     /// Renders the given string. The width of each line in the returned string is the maximum width
     /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
     /// form feed characters).
+    ///
+    /// In case the font uses characters that are not valid UTF-8 (which you can check using
+    /// [`Font::is_utf8`]), consider using
+    /// [`render_bytes_unbounded()`](Renderer::render_bytes_unbounded) instead. This method is a
+    /// convenience wrapper around it using [`String::from_utf8_lossy`].
     #[must_use]
-    pub fn render_unbounded(&self, mut string: &str) -> String {
-        let mut lines: Vec<Vec<Vec<char>>> = Vec::new();
+    pub fn render_unbounded(&self, string: &str) -> String {
+        String::from_utf8_lossy(&self.render_bytes_unbounded(string)).into_owned()
+    }
+
+    /// Renders the given string as a byte sequence. The width of each line in the returned string
+    /// is the maximum width of the rendered lines of the input (broken at newlines, carriage
+    /// returns, vertical tabs, and form feed characters).
+    #[must_use]
+    pub fn render_bytes_unbounded(&self, mut string: &str) -> Vec<u8> {
+        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
         let mut width = 0;
         while !string.is_empty() {
             let (line, line_width, rest) = if self.config.full_width() {
@@ -149,7 +186,7 @@ impl<'font> Renderer<'font> {
         for row in lines.iter_mut().flatten() {
             for c in row.iter_mut() {
                 if self.font.header().hardblank == *c {
-                    *c = ' ';
+                    *c = b' ';
                 }
             }
             *row = self.config.alignment.pad(mem::take(row), width);
@@ -162,8 +199,8 @@ impl<'font> Renderer<'font> {
         &self,
         mut string: &'a str,
         max_width: Option<usize>,
-    ) -> (Vec<Vec<char>>, usize, &'a str) {
-        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header().height];
+    ) -> (Vec<Vec<u8>>, usize, &'a str) {
+        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;
@@ -174,7 +211,7 @@ impl<'font> Renderer<'font> {
             if c == ' ' && !saved {
                 before_space = Some((line.clone(), width, string));
             }
-            if LINE_BREAK_CHARACTERS.contains(&c) {
+            if LINE_BREAKS.contains(&c) {
                 string = chars.as_str();
                 break;
             }
@@ -204,7 +241,7 @@ impl<'font> Renderer<'font> {
 
     fn append(
         &self,
-        line: &mut Vec<Vec<char>>,
+        line: &mut Vec<Vec<u8>>,
         width: &mut usize,
         c: char,
         max_width: Option<usize>,
@@ -237,8 +274,8 @@ impl<'font> Renderer<'font> {
         &self,
         mut string: &'a str,
         max_width: Option<usize>,
-    ) -> (Vec<Vec<char>>, usize, &'a str) {
-        let mut line: Vec<Vec<char>> = vec![Vec::new(); self.font.header().height];
+    ) -> (Vec<Vec<u8>>, usize, &'a str) {
+        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;
@@ -250,7 +287,7 @@ impl<'font> Renderer<'font> {
                 before_space = Some((line.clone(), width, string));
                 saved = true;
             }
-            if LINE_BREAK_CHARACTERS.contains(&c) {
+            if LINE_BREAKS.contains(&c) {
                 string = chars.as_str();
                 break;
             }
@@ -280,7 +317,7 @@ impl<'font> Renderer<'font> {
         (line, width, string)
     }
 
-    fn row_smush_data(&self, buffer: &[Vec<char>], char_rows: &[String]) -> Vec<RowSmush> {
+    fn row_smush_data(&self, buffer: &[Vec<u8>], char_rows: &[Vec<u8>]) -> Vec<RowSmush> {
         buffer
             .iter()
             .zip(char_rows)
@@ -292,12 +329,12 @@ impl<'font> Renderer<'font> {
             .collect()
     }
 
-    fn join(&self, rows: Vec<Vec<char>>) -> String {
-        let mut buffer = String::new();
+    fn join(&self, rows: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut buffer = Vec::new();
         let mut first = true;
         for row in rows {
             if !first {
-                buffer.push('\n');
+                buffer.push(b'\n');
             }
             if self.config.direction == PrintDirection::LeftToRight {
                 buffer.extend(row);
@@ -309,7 +346,7 @@ impl<'font> Renderer<'font> {
         buffer
     }
 
-    fn stack(&self, lines: Vec<Vec<Vec<char>>>, width: usize) -> Vec<Vec<char>> {
+    fn stack(&self, lines: Vec<Vec<Vec<u8>>>, width: usize) -> Vec<Vec<u8>> {
         let mut rows = Vec::new();
         if self.config.full_height() {
             rows.extend(lines.into_iter().flatten());
@@ -336,7 +373,10 @@ impl<'font> Renderer<'font> {
             }
         }
         if !self.config.full_height() {
-            while rows.last().is_some_and(|row| row.iter().all(|&c| c == ' ')) {
+            while rows
+                .last()
+                .is_some_and(|row| row.iter().all(|&c| c == b' '))
+            {
                 drop(rows.pop());
             }
         }
@@ -345,8 +385,8 @@ impl<'font> Renderer<'font> {
 
     fn column_smush_data(
         &self,
-        end: &[Vec<char>],
-        start: &[Vec<char>],
+        end: &[Vec<u8>],
+        start: &[Vec<u8>],
         width: usize,
     ) -> Vec<ColumnSmush> {
         (0..width)
@@ -358,9 +398,9 @@ impl<'font> Renderer<'font> {
             .collect()
     }
 
-    fn trimming(line: impl IntoIterator<Item = impl IntoIterator<Item = char>>) -> usize {
+    fn trimming(line: impl IntoIterator<Item = impl IntoIterator<Item = u8>>) -> usize {
         line.into_iter()
-            .map(|row| row.into_iter().take_while(|&c| c == ' ').count())
+            .map(|row| row.into_iter().take_while(|&c| c == b' ').count())
             .min()
             .unwrap_or(0)
     }
@@ -381,11 +421,11 @@ pub enum PrintDirection {
 }
 
 impl PrintDirection {
-    pub(crate) fn decode(print_direction: Option<&str>) -> Result<Self, HeaderError> {
+    pub(crate) fn decode(print_direction: Option<&[u8]>) -> Result<Self, HeaderError> {
         Ok(match print_direction {
-            None | Some("0") => Self::LeftToRight,
-            Some("1") => Self::RightToLeft,
-            Some(other) => return Err(HeaderError::PrintDirection(other.to_owned())),
+            None | Some(b"0") => Self::LeftToRight,
+            Some(b"1") => Self::RightToLeft,
+            Some(other) => return Err(HeaderError::PrintDirection(other.into())),
         })
     }
 }
@@ -416,23 +456,23 @@ pub enum Alignment {
 }
 
 impl Alignment {
-    fn pad(self, mut row: Vec<char>, to_width: usize) -> Vec<char> {
+    fn pad(self, mut row: Vec<u8>, to_width: usize) -> Vec<u8> {
         let Some(padding) = to_width.checked_sub(row.len()) else {
             return row;
         };
         match self {
             Self::Start => {
-                row.extend(repeat_n(' ', padding));
+                row.extend(repeat_n(b' ', padding));
                 row
             }
             Self::Center => {
                 let start = padding / 2;
-                repeat_n(' ', start)
+                repeat_n(b' ', start)
                     .chain(row)
-                    .chain(repeat_n(' ', padding - start))
+                    .chain(repeat_n(b' ', padding - start))
                     .collect()
             }
-            Self::End => repeat_n(' ', padding).chain(row).collect(),
+            Self::End => repeat_n(b' ', padding).chain(row).collect(),
         }
     }
 }
@@ -475,22 +515,22 @@ enum RowSmush {
     Smush {
         end_blanks: usize,
         start_blanks: usize,
-        smush: Option<char>,
+        smush: Option<u8>,
     },
 }
 
 impl RowSmush {
     fn new(
-        end: (usize, Option<char>),
-        start: (usize, Option<char>),
+        end: (usize, Option<u8>),
+        start: (usize, Option<u8>),
         config: Config,
         hardblank: Hardblank,
     ) -> Self {
         match (end.1, start.1) {
+            (_, None) => Self::Keep { end_blanks: end.0 },
             (None, _) => Self::Overwrite {
                 start_blanks: start.0,
             },
-            (_, None) => Self::Keep { end_blanks: end.0 },
             (Some(end_char), Some(start_char)) => {
                 let smush = config
                     .horizontal_layout
@@ -519,8 +559,8 @@ impl RowSmush {
     fn combine(
         &self,
         shift: usize,
-        buffer_row: &mut Vec<char>,
-        char_row: &str,
+        buffer_row: &mut Vec<u8>,
+        char_row: &[u8],
         direction: PrintDirection,
     ) {
         match self {
@@ -528,12 +568,12 @@ impl RowSmush {
                 if char_row.len() <= shift {
                     buffer_row.truncate(buffer_row.len() + char_row.len() - shift);
                 } else {
-                    buffer_row.extend(repeat_n(' ', char_row.len() - shift));
+                    buffer_row.extend(repeat_n(b' ', char_row.len() - shift));
                 }
             }
             Self::Overwrite { .. } => {
-                buffer_row.truncate(buffer_row.len().saturating_sub(shift));
                 let skip = shift.saturating_sub(buffer_row.len());
+                buffer_row.truncate(buffer_row.len().saturating_sub(shift));
                 buffer_row.extend(char_row.bidi_chars(direction).skip(skip));
             }
             &Self::Smush {
@@ -557,11 +597,11 @@ impl RowSmush {
         }
     }
 
-    fn count_blanks(chars: impl Iterator<Item = char>) -> (usize, Option<char>) {
+    fn count_blanks(chars: impl Iterator<Item = u8>) -> (usize, Option<u8>) {
         let mut blanks = 0;
         let mut next = None;
         for c in chars {
-            if c == ' ' {
+            if c == b' ' {
                 blanks += 1;
             } else {
                 next = Some(c);
@@ -582,16 +622,16 @@ enum ColumnSmush {
     NoBars {
         end_blanks: usize,
         start_blanks: usize,
-        smush: Option<char>,
+        smush: Option<u8>,
     },
     EndBar {
         end_blanks: usize,
         start_blanks: usize,
         start_offset: usize,
-        smush: Option<char>,
+        smush: Option<u8>,
     },
     StartBar {
-        smush: Option<char>,
+        smush: Option<u8>,
         end_offset: usize,
         end_blanks: usize,
         start_blanks: usize,
@@ -600,7 +640,7 @@ enum ColumnSmush {
         end_blanks: usize,
         bars: usize,
         start_blanks: usize,
-        smush: Option<(char, char)>,
+        smush: Option<(u8, u8)>,
     },
 }
 
@@ -621,7 +661,7 @@ impl ColumnSmush {
                 },
                 _ => match end.bars.cmp(&start.bars) {
                     Ordering::Less => Self::StartBar {
-                        smush: end.next.and_then(|end| layout.smush(end, '|')),
+                        smush: end.next.and_then(|end| layout.smush(end, b'|')),
                         end_offset: end.total(),
                         end_blanks: end.blanks,
                         start_blanks: start.blanks,
@@ -629,8 +669,8 @@ impl ColumnSmush {
                     Ordering::Equal => {
                         let smush = end
                             .next
-                            .and_then(|end| layout.smush(end, '|'))
-                            .zip(start.next.and_then(|start| layout.smush('|', start)));
+                            .and_then(|end| layout.smush(end, b'|'))
+                            .zip(start.next.and_then(|start| layout.smush(b'|', start)));
                         Self::DoubleSmush {
                             end_blanks: end.blanks,
                             bars: end.bars,
@@ -642,7 +682,7 @@ impl ColumnSmush {
                         end_blanks: end.blanks,
                         start_blanks: start.blanks,
                         start_offset: start.total(),
-                        smush: start.next.and_then(|start| layout.smush('|', start)),
+                        smush: start.next.and_then(|start| layout.smush(b'|', start)),
                     },
                 },
             }
@@ -693,7 +733,7 @@ impl ColumnSmush {
         }
     }
 
-    fn combine(&self, rows: &mut [Vec<char>], line: &[Vec<char>], i: usize, shift: usize) {
+    fn combine(&self, rows: &mut [Vec<u8>], line: &[Vec<u8>], i: usize, shift: usize) {
         // this is mostly shift.saturating_sub(start_blanks).min(end_blanks) and the special case
         // end_blanks when smushing occurs but it's not clear how to avoid the repetition
         let rows_to_overwrite = match self {
@@ -768,23 +808,23 @@ impl ColumnSmush {
 struct BlanksAndBars {
     blanks: usize,
     bars: usize,
-    next: Option<char>,
+    next: Option<u8>,
 }
 
 impl BlanksAndBars {
-    fn count(chars: impl Iterator<Item = char>) -> Self {
+    fn count(chars: impl Iterator<Item = u8>) -> Self {
         let mut blanks = 0;
         let mut bars = 0;
         let mut next = None;
         let mut in_bars = false;
         for c in chars {
             match (c, in_bars) {
-                (' ', false) => blanks += 1,
-                ('|', false) => {
+                (b' ', false) => blanks += 1,
+                (b'|', false) => {
                     bars += 1;
                     in_bars = true;
                 }
-                ('|', true) => bars += 1,
+                (b'|', true) => bars += 1,
                 (c, _) => {
                     next = Some(c);
                     break;
@@ -798,8 +838,8 @@ impl BlanksAndBars {
         self.blanks + self.bars
     }
 
-    const fn next_to_blank(&self) -> Option<char> {
-        if self.bars > 0 { Some('|') } else { self.next }
+    const fn next_to_blank(&self) -> Option<u8> {
+        if self.bars > 0 { Some(b'|') } else { self.next }
     }
 }
 
@@ -892,15 +932,15 @@ pub(crate) mod test {
             .render("floccinaucinihilipilification", 80)
             .unwrap();
 
-        let expected = r"  __ _                _                        _       _ _     _ _ _       _ _  
- / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)_ __ (_) |__ (_) (_)_ __ (_) | 
-| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| | '_ \| | '_ \| | | | '_ \| | | 
-|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| | | | | | | | | | | | |_) | | | 
-|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_| |_|_|_| |_|_|_|_| .__/|_|_| 
-(_)/ _(_) ___ __ _| |_(_) ___  _ __                                 |_|         
-| | |_| |/ __/ _` | __| |/ _ \| '_ \                                            
-| |  _| | (_| (_| | |_| | (_) | | | |                                           
-|_|_| |_|\___\__,_|\__|_|\___/|_| |_|                                           ";
+        let expected = r"  __ _                _                        _       _ _     _ _ _       _ _ 
+ / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)_ __ (_) |__ (_) (_)_ __ (_) |
+| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| | '_ \| | '_ \| | | | '_ \| | |
+|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| | | | | | | | | | | | |_) | | |
+|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_| |_|_|_| |_|_|_|_| .__/|_|_|
+(_)/ _(_) ___ __ _| |_(_) ___  _ __                                 |_|        
+| | |_| |/ __/ _` | __| |/ _ \| '_ \                                           
+| |  _| | (_| (_| | |_| | (_) | | | |                                          
+|_|_| |_|\___\__,_|\__|_|\___/|_| |_|                                          ";
         assert_eq!(rendered, expected);
     }
 
@@ -909,16 +949,36 @@ pub(crate) mod test {
         let rendered = Renderer::new(&Font::standard())
             .render("floccinauci                  nihilipilification", 80)
             .unwrap();
-        let expected = r"  __ _                _                        _                                
- / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)                               
-| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| |                               
-|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| |                               
-|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_   _                          
- _ __ (_) |__ (_) (_)_ __ (_) (_)/ _(_) ___ __ _| |_(_) ___  _ __               
-| '_ \| | '_ \| | | | '_ \| | | | |_| |/ __/ _` | __| |/ _ \| '_ \              
-| | | | | | | | | | | |_) | | | |  _| | (_| (_| | |_| | (_) | | | |             
-|_| |_|_|_| |_|_|_|_| .__/|_|_|_|_| |_|\___\__,_|\__|_|\___/|_| |_|             
-                    |_|                                                         ";
+        let expected = r"  __ _                _                        _                   
+ / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)                  
+| |_| |/ _ \ / __/ __| | '_ \ / _` | | | |/ __| |                  
+|  _| | (_) | (_| (__| | | | | (_| | |_| | (__| |                  
+|_| |_|\___/ \___\___|_|_| |_|\__,_|\__,_|\___|_|_   _             
+ _ __ (_) |__ (_) (_)_ __ (_) (_)/ _(_) ___ __ _| |_(_) ___  _ __  
+| '_ \| | '_ \| | | | '_ \| | | | |_| |/ __/ _` | __| |/ _ \| '_ \ 
+| | | | | | | | | | | |_) | | | |  _| | (_| (_| | |_| | (_) | | | |
+|_| |_|_|_| |_|_|_|_| .__/|_|_|_|_| |_|\___\__,_|\__|_|\___/|_| |_|
+                    |_|                                            ";
+        assert_eq!(rendered, expected);
+    }
+
+    #[cfg(feature = "fonts")]
+    #[test]
+    fn mini_pangram() {
+        use letrs_fonts::FontFile;
+
+        let font_mini = Font::built_in(FontFile::Mini);
+        let rendered = Renderer::new(&font_mini)
+            .render("The quick brown fox jumps over the lazy dog.", 80)
+            .unwrap();
+        let expected = r"___                                   _                                
+ ||_  _   _.   o _|  |_ .__     ._  _|__     o   ._ _ ._  _  _    _ ._ 
+ || |(/_ (_||_||(_|< |_)|(_)\/\/| |  |(_)><  ||_|| | ||_)_> (_)\/(/_|  
+           |                                _|        |                
+                                                                       
+_|_|_  _  | _._     _| _  _                                            
+ |_| |(/_ |(_|/_\/ (_|(_)(_|o                                          
+                /         _|                                           ";
         assert_eq!(rendered, expected);
     }
 }

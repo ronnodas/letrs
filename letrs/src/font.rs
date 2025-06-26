@@ -3,16 +3,17 @@
 //! Font types and the logic for parsing `.flf` files.
 
 use std::collections::HashMap;
-use std::num::ParseIntError;
 use std::str::FromStr;
 
+use bstr::{BString, ByteSlice as _};
 use itertools::Itertools as _;
+#[cfg(feature = "fonts")]
+pub use letrs_fonts::FontFile;
 use thiserror::Error;
 
 use crate::render::{
     HorizontalLayout, LayoutDecodeError, PrintDirection, Renderer, VerticalLayout,
 };
-use crate::str_ext::StrExt as _;
 
 /// The 102 codepoints for characters that are included in all FIGfonts
 ///
@@ -33,44 +34,67 @@ pub struct Font {
     characters: HashMap<u32, Character>,
     code_tagged_characters: HashMap<u32, String>,
     ignored_characters: HashMap<u32, String>,
+    is_utf8: bool,
 }
 
 impl Font {
-    pub(crate) const STANDARD: &'static str = include_str!("standard.flf");
+    pub(crate) const STANDARD: &'static [u8] = include_bytes!("standard.flf");
+
+    /// Decodes the contents of an `.flf` file.
+    ///
+    /// If unsure about the input being a fully compliant FIGfont, consider
+    /// [`Font::from_str_with_warnings`]; this method is (currently) a convenience wrapper around
+    /// that, ignoring the warnings. Notably, if the font has FIGcharacters that do not use the same
+    /// number of sub-characters (bytes) per row, the rendering algorithm may behave unexpectedly,
+    /// but this is only emitted as a warning (when using [`Font::from_str_with_warnings`]) and not
+    /// a fatal error.
+    ///
+    /// # Errors
+    /// See [`FontError`].
+    fn from_bytes(font: impl AsRef<[u8]>) -> Result<Self, FontError> {
+        Self::from_bytes_with_warnings(font).map(|(font, _)| font)
+    }
 
     /// Decodes the contents of an `.flf` file and also returns any non-fatal issues found while
     /// decoding.
     ///
     /// See [`FontWarning`] for details on these warnings. Notably, if the font has FIGcharacters
-    /// that do not use the same number of UTF-8 codepoints per row, the rendering algorithm may
-    /// behave unexpectedly, but this is only emitted as a warning and not a fatal error. This is to
-    /// allow sub-characters with different UTF-8 length but the same visual width, although in that
-    /// case alignment will not work correctly.
+    /// that do not use the same number of sub-characters (bytes) per row, the rendering algorithm
+    /// may behave unexpectedly, but this is only emitted as a warning and not a fatal error.
     ///
     /// # Errors
     /// These are fatal decoding errors, see [`FontError`].
-    pub fn from_str_with_warnings(
-        font_string: &str,
+    pub fn from_bytes_with_warnings(
+        bytes: impl AsRef<[u8]>,
     ) -> Result<(Self, Vec<FontWarning>), FontError> {
         let mut warnings = Vec::new();
-        let font_string = font_string.replace("\r\n", "\n").replace('\r', "\n");
+        let font_string: BString = bytes
+            .as_ref()
+            .replace("\r\n", "\n")
+            .into_iter()
+            .map(|c| if c == b'\r' { b'\n' } else { c })
+            .collect();
+
         let mut lines = font_string.lines();
         let Some(header_line) = lines.next() else {
             return Err(FontError::BadHeader(HeaderError::Missing));
         };
         let header = Header::decode(header_line, &mut warnings)?;
-        let comments = lines.by_ref().take(header.comment_lines).join("\n");
+        let comments =
+            String::from_utf8_lossy(&bstr::join("\n", lines.by_ref().take(header.comment_lines)))
+                .into_owned();
         let mut font = Self {
             header,
             comments,
             characters: HashMap::new(),
             code_tagged_characters: HashMap::new(),
             ignored_characters: HashMap::new(),
+            is_utf8: true,
         };
         font.decode_characters(&mut lines, &mut warnings)?;
 
         if let Some(line) = lines.next() {
-            warnings.push(FontWarning::AfterCharacters(line.to_owned()));
+            warnings.push(FontWarning::AfterCharacters(line.to_owned().into()));
         }
 
         Ok((font, warnings))
@@ -80,7 +104,17 @@ impl Font {
     #[expect(clippy::missing_panics_doc, reason = "should be caught in tests")]
     #[must_use]
     pub fn standard() -> Self {
-        Self::from_str(Self::STANDARD).expect("Should be tested")
+        Self::from_bytes(Self::STANDARD).expect("Should be tested")
+    }
+
+    /// Decodes a FIGfont from the `letrs-fonts` crate.
+    ///
+    /// Only available with the `fonts` feature.
+    #[expect(clippy::missing_panics_doc, reason = "should be caught in tests")]
+    #[cfg(feature = "fonts")]
+    #[must_use]
+    pub fn built_in(font: FontFile) -> Self {
+        Self::from_bytes(font.as_bytes()).expect("Should be tested")
     }
 
     /// Renders a string with default settings provided by the font and no `max_width` (so that the
@@ -110,13 +144,19 @@ impl Font {
         &self.ignored_characters
     }
 
+    /// Returns true if each row of each FIGcharacter in the font is a valid UTF-8 string.
+    #[must_use]
+    pub const fn is_utf8(&self) -> bool {
+        self.is_utf8
+    }
+
     #[expect(
         single_use_lifetimes,
         reason = "https://github.com/rust-lang/rust/issues/137575"
     )]
     pub(crate) fn decode_characters<'a>(
         &mut self,
-        mut lines: impl Iterator<Item = &'a str>,
+        mut lines: impl Iterator<Item = &'a [u8]>,
         warnings: &mut Vec<FontWarning>,
     ) -> Result<(), FontError> {
         let default_char_chunks = lines
@@ -131,28 +171,35 @@ impl Font {
             drop(self.characters.insert(codepoint, character));
         }
         if self.characters.len() != DEFAULT_CODEPOINTS.len() {
-            return Err(FontError::MissingDefaultCharacters(self.characters.len()));
+            warnings.push(FontWarning::MissingDefaultCharacters(self.characters.len()));
         }
         let mut processed_chars = 0;
         for mut rows in &lines.by_ref().chunks(self.header.height + 1) {
             let line = rows.next().expect("chunk size >= 1");
-            let (codepoint, desc) = line
-                .split_once(' ')
+
+            let (codepoint, content) = line
+                .split_once_str(" ")
                 .map_or((line, None), |(codepoint, desc)| {
                     (codepoint, Some(desc.trim()))
                 });
-            let (codepoint, positive) = Self::parse_codepoint(codepoint)?;
+            let (codepoint, positive) =
+                Self::parse_codepoint(std::str::from_utf8(codepoint).map_err(|_| {
+                    FontError::InvalidCharacterCode(BString::new(codepoint.to_owned()))
+                })?)?;
             if positive {
-                if let Some(desc) = desc {
+                if let Some(content) = content {
                     drop(
                         self.code_tagged_characters
-                            .insert(codepoint, desc.to_owned()),
+                            .insert(codepoint, String::from_utf8_lossy(content).into_owned()),
                     );
                 }
                 let character = Character::parse(rows, codepoint, &self.header, warnings)?;
                 drop(self.characters.insert(codepoint, character));
             } else {
-                drop(self.ignored_characters.insert(codepoint, rows.join("\n")));
+                drop(self.ignored_characters.insert(
+                    codepoint,
+                    String::from_utf8_lossy(&bstr::join(b"\n", rows)).into_owned(),
+                ));
             }
             processed_chars += 1;
         }
@@ -162,6 +209,7 @@ impl Font {
                 expected: self.header.code_tag_count,
             });
         }
+        self.is_utf8 = self.characters.values().all(|c| c.is_utf8);
         Ok(())
     }
 
@@ -177,14 +225,16 @@ impl Font {
             clippy::option_if_let_else,
             reason = "nested if let else, with both arms non-trivial"
         )]
-        let codepoint = if let Some(codepoint) = codepoint.strip_prefix("0x") {
+        let result = if let Some(codepoint) = codepoint.strip_prefix("0x") {
             u32::from_str_radix(codepoint, 16)
+        } else if codepoint == "0" {
+            Ok(0)
         } else if let Some(codepoint) = codepoint.strip_prefix("0") {
             u32::from_str_radix(codepoint, 8)
         } else {
             codepoint.parse()
         };
-        let codepoint = codepoint.map_err(FontError::InvalidCharacterCode)?;
+        let codepoint = result.map_err(|_| FontError::InvalidCharacterCode(codepoint.into()))?;
         if (positive && codepoint <= 0x7FFF_FFFF)
             || (!positive && (2..=0x8000_0000).contains(&codepoint))
         {
@@ -198,26 +248,6 @@ impl Font {
         self.characters
             .get(&u32::from(char))
             .or_else(|| self.characters.get(&0))
-    }
-}
-
-impl FromStr for Font {
-    type Err = FontError;
-
-    /// Decodes the contents of an `.flf` file.
-    ///
-    /// If unsure about the input being a fully compliant FIGfont, consider
-    /// [`Font::from_str_with_warnings`]; this method is (currently) a convenience wrapper around
-    /// that, ignoring the warnings. Notably, if the font has FIGcharacters that do not use the same
-    /// number of UTF-8 codepoints per row, the rendering algorithm may behave unexpectedly, but
-    /// this is only emitted as a warning (when using [`Font::from_str_with_warnings`]) and not a
-    /// fatal error. This is to allow sub-characters with different UTF-8 lengths but the same
-    /// visual width.
-    ///
-    /// # Errors
-    /// See [`FontError`].
-    fn from_str(font: &str) -> Result<Self, FontError> {
-        Self::from_str_with_warnings(font).map(|(font, _)| font)
     }
 }
 
@@ -242,8 +272,8 @@ pub struct Header {
     /// Should be between 1 and [`height`](Header::height) inclusive; see
     /// [`FontWarning::BaselineOutOfRange`].
     pub baseline: usize,
-    /// The maximum (UTF-8) length of any row of a FIGcharacter. This should be the width of the
-    /// widest FIGcharacter, plus 2 (to accommodate *endmarks*); see [`FontWarning::ExcessLength`].
+    /// The maximum length of any row of a FIGcharacter. This should be the width of the widest
+    /// FIGcharacter, plus 2 (to accommodate *endmarks*); see [`FontWarning::ExcessLength`].
     pub max_length: usize,
     /// Number of lines of comments between the header and the FIGcharacters. See also
     /// [`Font::comments`].
@@ -263,11 +293,11 @@ pub struct Header {
 
 impl Header {
     pub(crate) fn decode(
-        header_line: &str,
+        header_line: &[u8],
         warnings: &mut Vec<FontWarning>,
     ) -> Result<Self, HeaderError> {
         let mut parameters = header_line
-            .split(' ')
+            .split(|&c| c == b' ')
             .filter(|parameter| !parameter.is_empty());
         let Some(
             [
@@ -280,42 +310,48 @@ impl Header {
             ],
         ) = parameters.next_array()
         else {
-            return Err(HeaderError::NotEnoughParameters(header_line.to_owned()));
+            return Err(HeaderError::NotEnoughParameters(BString::new(
+                header_line.to_owned(),
+            )));
         };
         let print_direction = parameters.next();
         let full_layout = parameters.next();
         let code_tag_count = parameters.next();
-
-        let Some(hardblank) = signature_and_hardblank.strip_prefix("flf2a") else {
+        let Some(hardblank) = signature_and_hardblank.strip_prefix(b"flf2a") else {
             return Err(HeaderError::UnknownSignature(
-                signature_and_hardblank.to_owned(),
+                signature_and_hardblank.into(),
             ));
         };
-        let Ok(hardblank) = hardblank.chars().exactly_one() else {
-            return Err(HeaderError::HardblankLength(hardblank.to_owned()));
+        let Ok(hardblank) = hardblank.bytes().exactly_one() else {
+            return Err(HeaderError::HardblankLength(hardblank.into()));
         };
         let hardblank = hardblank
             .try_into()
             .map_err(HeaderError::InvalidHardblankChar)?;
-        let height = height.parse()?;
+        let height = IntParameter::Height.parse(height)?;
         if height == 0 {
             return Err(HeaderError::ZeroHeight);
         }
-        let baseline = baseline.parse().unwrap_or_else(|_| {
-            warnings.push(FontWarning::Baseline(baseline.to_owned()));
+        let baseline = IntParameter::Baseline.parse(baseline).unwrap_or_else(|_| {
+            warnings.push(FontWarning::Baseline(baseline.into()));
             1
         });
         if !(0 < baseline && baseline <= height) {
             warnings.push(FontWarning::BaselineOutOfRange { baseline, height });
         }
-        let max_length = max_length.parse()?;
-        let comment_lines = comment_lines.parse()?;
-        let old_layout = old_layout.parse()?;
-        let full_layout = full_layout.map(str::parse).transpose()?;
+        let max_length = IntParameter::MaxLength.parse(max_length)?;
+        let comment_lines = IntParameter::CommentLines.parse(comment_lines)?;
+        let old_layout = IntParameter::OldLayout.parse(old_layout)?;
+        let full_layout = full_layout
+            .map(|full_layout| IntParameter::FullLayout.parse(full_layout))
+            .transpose()?;
         let horizontal_layout = HorizontalLayout::decode(old_layout, full_layout)?;
         let vertical_layout = VerticalLayout::decode(full_layout)?;
         let print_direction = PrintDirection::decode(print_direction)?;
-        let code_tag_count = code_tag_count.map(str::parse).transpose()?.unwrap_or(0);
+        let code_tag_count = code_tag_count
+            .map(|count| IntParameter::CodeTagCount.parse(count))
+            .transpose()?
+            .unwrap_or(0);
         let header = Self {
             hardblank,
             height,
@@ -331,6 +367,38 @@ impl Header {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum IntParameter {
+    Height,
+    Baseline,
+    MaxLength,
+    CommentLines,
+    OldLayout,
+    FullLayout,
+    CodeTagCount,
+}
+
+impl IntParameter {
+    fn parse<T: FromStr>(self, bytes: &[u8]) -> Result<T, HeaderError> {
+        std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| HeaderError::Parse(self.name(), bytes.into()))
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Height => "Height",
+            Self::Baseline => "Baseline",
+            Self::MaxLength => "Max_Length",
+            Self::CommentLines => "Comment_Lines",
+            Self::OldLayout => "Old_Layout",
+            Self::FullLayout => "Full_Layout",
+            Self::CodeTagCount => "Codetag_Count",
+        }
+    }
+}
+
 /// A hardblank character
 ///
 /// A hardblank is a special sub-character which is displayed as a blank (`' '`) once rendered, but
@@ -343,19 +411,19 @@ impl Header {
 /// See [`HorizontalSmushing`](crate::render::HorizontalSmushing) and [The FIGfont
 /// standard](http://www.jave.de/figlet/figfont.html#hardblanks) for more details.
 #[derive(Clone, Copy, Debug)]
-pub struct Hardblank(char);
+pub struct Hardblank(u8);
 
-impl PartialEq<char> for Hardblank {
-    fn eq(&self, other: &char) -> bool {
+impl PartialEq<u8> for Hardblank {
+    fn eq(&self, other: &u8) -> bool {
         self.0 == *other
     }
 }
 
-impl TryFrom<char> for Hardblank {
-    type Error = char;
+impl TryFrom<u8> for Hardblank {
+    type Error = u8;
 
-    fn try_from(value: char) -> Result<Self, Self::Error> {
-        if matches!(value, ' ' | '\r' | '\n' | '\0') {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if matches!(value, b' ' | b'\r' | b'\n' | 0) {
             Err(value)
         } else {
             Ok(Self(value))
@@ -366,7 +434,8 @@ impl TryFrom<char> for Hardblank {
 #[derive(Debug)]
 pub(crate) struct Character {
     pub width: usize,
-    pub rows: Vec<String>,
+    pub rows: Vec<Vec<u8>>,
+    pub is_utf8: bool,
 }
 
 impl Character {
@@ -375,34 +444,43 @@ impl Character {
         reason = "https://github.com/rust-lang/rust/issues/137575"
     )]
     pub(crate) fn parse<'a>(
-        rows: impl Iterator<Item = &'a str>,
+        rows: impl Iterator<Item = &'a [u8]>,
         codepoint: u32,
         header: &Header,
         warnings: &mut Vec<FontWarning>,
     ) -> Result<Self, FontError> {
+        let mut too_large_length = None;
+        let mut blank_end_mark = false;
+        let mut is_utf8 = true;
         let rows = rows
-            .enumerate()
-            .map(|(index, line)| {
-                if !line.is_ascii() {
-                    warnings.push(FontWarning::NonAscii(codepoint, index));
-                }
+            .map(|line| {
                 if line.len() > header.max_length {
-                    warnings.push(FontWarning::ExcessLength {
-                        codepoint,
-                        row: index,
-                        length: line.len(),
-                        max_length: header.max_length,
-                    });
+                    too_large_length = Some(line.len());
                 }
-                let last = line.last()?;
-                if last == ' ' {
-                    warnings.push(FontWarning::BlankEndMark(codepoint, index));
+                let &last = line.last()?;
+                if last == b' ' {
+                    blank_end_mark = true;
                 }
-                Some(line.trim_end_matches(last).to_owned())
+                let mark_count = line.iter().rev().take_while(|&&c| c == last).count();
+                let (line, _) = line.split_at(line.len() - mark_count);
+                if !line.is_utf8() {
+                    is_utf8 = false;
+                }
+                Some(line.to_owned())
             })
-            .collect::<Option<Vec<String>>>()
+            .collect::<Option<Vec<_>>>()
             .ok_or(FontError::EmptyRow(codepoint))?;
-        let width = match rows.iter().map(String::len).unique().exactly_one() {
+        if let Some(length) = too_large_length {
+            warnings.push(FontWarning::ExcessLength {
+                codepoint,
+                length,
+                max_length: header.max_length,
+            });
+        }
+        if blank_end_mark {
+            warnings.push(FontWarning::BlankEndMark(codepoint));
+        }
+        let width = match rows.iter().map(Vec::len).unique().exactly_one() {
             Ok(width) => width,
             Err(widths) => {
                 warnings.push(FontWarning::InconsistentWidth(codepoint));
@@ -410,7 +488,11 @@ impl Character {
             }
         };
 
-        Ok(Self { width, rows })
+        Ok(Self {
+            width,
+            rows,
+            is_utf8,
+        })
     }
 }
 
@@ -420,12 +502,9 @@ pub enum FontError {
     /// An error in decoding the header
     #[error("Bad header: {0}")]
     BadHeader(#[from] HeaderError),
-    /// The font has fewer than the required 102 FIGcharacters
-    #[error("Not enough required FIGcharacters, found {0}, expected 102")]
-    MissingDefaultCharacters(usize),
     /// A character code cannot be parsed as a `u32`
-    #[error("{0}")]
-    InvalidCharacterCode(ParseIntError),
+    #[error("{0} is not a valid character code")]
+    InvalidCharacterCode(BString),
     /// A character code is outside the ranges `0..=2147483647` and `-2147483648..-1`
     #[error("{0}")]
     CharacterCodeOutOfRange(u32),
@@ -442,23 +521,23 @@ pub enum HeaderError {
     Missing,
     /// The header has fewer than the five required parameters (after the signature and hardblank).
     #[error(r#""{0}" does not include enough parameters"#)]
-    NotEnoughParameters(String),
+    NotEnoughParameters(BString),
     /// The header does not begin with "flf2a".
     #[error(r#"{0} does not begin with "flf2a""#)]
-    UnknownSignature(String),
+    UnknownSignature(BString),
     /// The hardblank is either missing or contains more than one character.
     #[error(r#"hardblank "{0}" is not exactly one character"#)]
-    HardblankLength(String),
-    /// The specified hardblank is either a blank (space), a carriage-return, a newline (linefeed)
-    /// or a null character.
+    HardblankLength(BString),
+    /// The specified hardblank is not a blank (space), a carriage-return, a newline (linefeed)
+    /// or a null byte.
     #[error("'{0}' must not be the hardblank")]
-    InvalidHardblankChar(char),
-    /// The height parameter cannot be parsed as a `usize`.
-    #[error("{0}")]
-    ParseInt(#[from] ParseIntError),
+    InvalidHardblankChar(u8),
+    /// One of the integer parameters cannot be parsed.
+    #[error("{1} cannot be parsed as the parameter `{0}`")]
+    Parse(&'static str, BString),
     /// The print direction parameter is not 0 or 1.
     #[error(r#""{0}" is an invalid print direction, expecting 0 or 1"#)]
-    PrintDirection(String),
+    PrintDirection(BString),
     /// An error decoding the layout parameters
     #[error("{0}")]
     Layout(#[from] LayoutDecodeError),
@@ -468,7 +547,7 @@ pub enum HeaderError {
 }
 
 /// A non-fatal issue with a FIGfont found while decoding
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FontWarning {
     /// A FIGcharacter contains a non-ASCII sub-character. This may cause issues with rendering and
@@ -477,7 +556,7 @@ pub enum FontWarning {
     NonAscii(u32, usize),
     /// The baseline parameter cannot be parsed as a `usize`.
     #[error(r#"could not parse "{0}" as the baseline parameter"#)]
-    Baseline(String),
+    Baseline(BString),
     /// The baseline parameter is not between 1 and the height parameter (inclusive).
     #[error("baseline {baseline} not between 1 and {height} (height)")]
     BaselineOutOfRange {
@@ -486,6 +565,9 @@ pub enum FontWarning {
         /// The height parameter
         height: usize,
     },
+    /// The font has fewer than the required 102 FIGcharacters
+    #[error("Not enough required FIGcharacters, found {0}, expected 102")]
+    MissingDefaultCharacters(usize),
     /// The font contains fewer tagged characters than specified in the header.
     #[error("found {found} tagged characters but expected {expected} from header")]
     TooFewCodeTags {
@@ -498,24 +580,22 @@ pub enum FontWarning {
     #[error("FIGcharacter with code {} has inconsistent width", Self::char_debug(*.0))]
     InconsistentWidth(u32),
     /// A FIGcharacter has a width greater than the maximum specified in the header.
-    #[error("row {row} in FIGcharacter with code {} has length {length} > {} (from header)", Self::char_debug(*.codepoint), .max_length)]
+    #[error("FIGcharacter with code {} has width {length} > {} (from header)", Self::char_debug(*.codepoint), .max_length)]
     ExcessLength {
         /// The character code
         codepoint: u32,
-        /// The row number
-        row: usize,
-        /// The UTF-8 length of a row that is too wide
+        /// The length of a row that is too wide
         length: usize,
         /// The maximum length of a row specified in the header
         max_length: usize,
     },
     /// The FIGfont contains data after the characters specified in the header.
     #[error("unexpected content after characters: {0}")]
-    AfterCharacters(String),
+    AfterCharacters(BString),
     /// A row in a FIGcharacter uses blank as an endmark. This likely indicates an extraneous
     /// trailing space, especially in combination with [`FontWarning::InconsistentWidth`].
-    #[error("row {1} in character with code {0} uses a blank as endmark")]
-    BlankEndMark(u32, usize),
+    #[error("FIGcharacter with code {0} uses a blank as endmark")]
+    BlankEndMark(u32),
 }
 
 impl FontWarning {
@@ -529,20 +609,30 @@ impl FontWarning {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::Font;
+    use super::{Font, FontFile};
 
     #[test]
     fn parse_standard() {
         use crate::render::test::{check_horizontal_standard, check_vertical_standard};
 
-        let (font, warnings) = Font::from_str_with_warnings(Font::STANDARD).unwrap();
+        let (font, warnings) = Font::from_bytes_with_warnings(Font::STANDARD).unwrap();
         assert!(warnings.is_empty());
-        assert_eq!(font.header.hardblank, '$');
+        assert_eq!(font.header.hardblank, b'$');
         assert_eq!(font.header.height, 6);
         assert_eq!(font.header.baseline, 5);
         assert_eq!(font.header.max_length, 16);
 
         check_horizontal_standard(font.header.horizontal_layout);
         check_vertical_standard(font.header.vertical_layout);
+    }
+
+    #[cfg(feature = "fonts")]
+    #[test]
+    fn parse_all() {
+        for font in FontFile::ALL {
+            let (_font, warnings) = Font::from_bytes_with_warnings(font.as_bytes())
+                .unwrap_or_else(|e| panic!("failed to parse {font:?}: {e:?}"));
+            assert_eq!(warnings, [], "warnings produced when parsing {font:?}",);
+        }
     }
 }

@@ -1,23 +1,36 @@
 //! CLI for the `letrs` library
-//! 
+//!
 //! Run as `letrs input` for default settings or use `letrs --help` to see options.
 
 use std::fmt::{self, Display};
 use std::fs;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use letrs::font::Font;
+use letrs::font::{Font, FontFile};
 use letrs::render::{PrintDirection, Renderer};
+use print_bytes::println_lossy;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let (font, warnings) = cli.font()?;
     let renderer = cli.renderer(&font);
-    if let Some(output) = renderer.render(&cli.input, cli.width) {
-        println!("{output}");
+    let success = if cli.raw_output {
+        renderer
+            .render_bytes(&cli.input, cli.width)
+            .is_some_and(|output| {
+                println_lossy(&output);
+                true
+            })
     } else {
+        renderer
+            .render(&cli.input, cli.width)
+            .is_some_and(|output| {
+                println!("{output}");
+                true
+            })
+    };
+    if !success {
         debug_assert!(
             warnings || cli.width + 2 < font.header().max_length,
             "rendering failed even though char width {} <= max width {}",
@@ -32,28 +45,38 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 struct Cli {
     input: String,
     #[arg(short = 'f')]
-    font: Option<PathBuf>,
+    font: Option<String>,
     #[arg(short = 'w', default_value_t = 80)]
     width: usize,
     #[arg(short = 'd')]
     direction: Option<Direction>,
     #[arg(short = 'j', default_value_t)]
     alignment: Alignment,
+    #[arg(short = 'l')]
+    horizontal_mode: Option<LayoutMode>,
+    #[arg(short = 'v')]
+    vertical_mode: Option<LayoutMode>,
+    #[arg(short = 'r')]
+    raw_output: bool,
 }
 
 impl Cli {
     fn font(&self) -> Result<(Font, bool)> {
-        let result = if let Some(path) = &self.font {
-            let (font, warnings) = Font::from_str_with_warnings(&fs::read_to_string(path)?)?;
-            let any_warnings = !warnings.is_empty();
-            for warning in warnings {
-                println!("WARNING: {warning}");
+        let result = if let Some(font) = &self.font {
+            if let Some(font) = FontFile::from_name(font) {
+                (Font::built_in(font), false)
+            } else {
+                let (font, warnings) = Font::from_bytes_with_warnings(&fs::read(font)?)?;
+                let any_warnings = !warnings.is_empty();
+                for warning in warnings {
+                    println!("WARNING: {warning}");
+                }
+                (font, any_warnings)
             }
-            (font, any_warnings)
         } else {
             (Font::standard(), false)
         };
@@ -65,11 +88,17 @@ impl Cli {
         if let Some(direction) = self.direction {
             renderer = renderer.print_direction(direction.into());
         }
+        if let Some(layout_mode) = self.horizontal_mode {
+            renderer = renderer.horizontal_layout(layout_mode.into());
+        }
+        if let Some(layout_mode) = self.vertical_mode {
+            renderer = renderer.vertical_layout(layout_mode.into());
+        }
         renderer
     }
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 enum Direction {
     LeftToRight,
@@ -85,7 +114,7 @@ impl From<Direction> for PrintDirection {
     }
 }
 
-#[derive(Clone, Copy, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
 #[value(rename_all = "kebab-case")]
 enum Alignment {
     #[default]
@@ -110,6 +139,24 @@ impl Display for Alignment {
             Self::Start => write!(f, "start"),
             Self::Center => write!(f, "center"),
             Self::End => write!(f, "end"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum LayoutMode {
+    Full,
+    Fit,
+    Smush,
+}
+
+impl From<LayoutMode> for letrs::render::LayoutMode {
+    fn from(value: LayoutMode) -> Self {
+        match value {
+            LayoutMode::Full => Self::FullSize,
+            LayoutMode::Fit => Self::Fitting,
+            LayoutMode::Smush => Self::Smushing,
         }
     }
 }

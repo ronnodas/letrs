@@ -112,6 +112,7 @@ impl HorizontalLayout {
             }
             let smushing = match u8::try_from(old_layout) {
                 Ok(smushing) if smushing == low & 63 => HorizontalSmushing::decode(smushing),
+                Err(_) => HorizontalSmushing::decode(low & 63),
                 _ => return Err(LayoutDecodeError::Inconsistent(old_layout, full_layout)),
             };
             Self {
@@ -141,7 +142,7 @@ impl HorizontalLayout {
         Ok(layout)
     }
 
-    pub(crate) fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
+    pub(crate) fn smush(self, end: u8, start: u8, hardblank: Hardblank) -> Option<u8> {
         if let LayoutMode::FullSize | LayoutMode::Fitting = self.mode {
             return None;
         }
@@ -211,7 +212,7 @@ impl VerticalLayout {
         })
     }
 
-    pub(crate) fn smush(self, end: char, start: char) -> Option<char> {
+    pub(crate) fn smush(self, end: u8, start: u8) -> Option<u8> {
         if let LayoutMode::FullSize | LayoutMode::Fitting = self.mode {
             return None;
         }
@@ -299,20 +300,25 @@ impl HorizontalSmushing {
         EnumSet::from_repr_truncated(bits)
     }
 
-    fn smush(self, end: char, start: char, hardblank: Hardblank) -> Option<char> {
+    fn smush(self, end: u8, start: u8, hardblank: Hardblank) -> Option<u8> {
         match self {
             Self::EqualCharacter => (end == start && hardblank != start).then_some(start),
             Self::Underscore => underscore(start, end).or_else(|| underscore(end, start)),
             Self::Hierarchy => hierarchy(start, end).or_else(|| hierarchy(end, start)),
             Self::OppositePair => matches!(
                 (end, start),
-                ('[', ']') | (']', '[') | ('{', '}') | ('}', '{') | ('(', ')') | (')', '(')
+                (b'[', b']')
+                    | (b']', b'[')
+                    | (b'{', b'}')
+                    | (b'}', b'{')
+                    | (b'(', b')')
+                    | (b')', b'(')
             )
-            .then_some('|'),
+            .then_some(b'|'),
             Self::BigX => match (end, start) {
-                ('/', '\\') => Some('|'),
-                ('\\', '/') => Some('Y'),
-                ('>', '<') => Some('X'),
+                (b'/', b'\\') => Some(b'|'),
+                (b'\\', b'/') => Some(b'Y'),
+                (b'>', b'<') => Some(b'X'),
                 _ => None,
             },
             Self::Hardblank => (hardblank == end && end == start).then_some(start),
@@ -361,35 +367,39 @@ impl VerticalSmushing {
         EnumSet::from_repr_truncated(bits)
     }
 
-    fn smush(self, end: char, start: char) -> Option<char> {
+    fn smush(self, end: u8, start: u8) -> Option<u8> {
         match self {
             Self::EqualCharacter => (end == start).then_some(end),
             Self::Underscore => underscore(start, end).or_else(|| underscore(end, start)),
             Self::Hierarchy => hierarchy(start, end).or_else(|| hierarchy(end, start)),
-            Self::HorizontalLine => matches!((start, end), ('_', '-') | ('-', '_')).then_some('='),
+            Self::HorizontalLine => {
+                matches!((start, end), (b'_', b'-') | (b'-', b'_')).then_some(b'=')
+            }
             Self::VerticalLineSuper => None,
         }
     }
 }
 
-fn underscore(a: char, b: char) -> Option<char> {
+fn underscore(a: u8, b: u8) -> Option<u8> {
     (matches!(
         b,
-        '|' | '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
-    ) && a == '_')
+        b'|' | b'/' | b'\\' | b'[' | b']' | b'{' | b'}' | b'(' | b')' | b'<' | b'>'
+    ) && a == b'_')
         .then_some(b)
 }
 
-fn hierarchy(a: char, b: char) -> Option<char> {
+fn hierarchy(a: u8, b: u8) -> Option<u8> {
     matches!(
         (a, b),
         (
-            '|',
-            '/' | '\\' | '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>'
-        ) | ('/' | '\\', '[' | ']' | '{' | '}' | '(' | ')' | '<' | '>')
-            | ('[' | ']', '{' | '}' | '(' | ')' | '<' | '>')
-            | ('{' | '}', '(' | ')' | '<' | '>')
-            | ('(' | ')', '<' | '>')
+            b'|',
+            b'/' | b'\\' | b'[' | b']' | b'{' | b'}' | b'(' | b')' | b'<' | b'>'
+        ) | (
+            b'/' | b'\\',
+            b'[' | b']' | b'{' | b'}' | b'(' | b')' | b'<' | b'>'
+        ) | (b'[' | b']', b'{' | b'}' | b'(' | b')' | b'<' | b'>')
+            | (b'{' | b'}', b'(' | b')' | b'<' | b'>')
+            | (b'(' | b')', b'<' | b'>')
     )
     .then_some(b)
 }

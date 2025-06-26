@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["letrs", "letrs-cli"]
+members = ["letrs", "letrs-cli", "letrs-fonts"]
 
 
 [workspace.lints.rust]

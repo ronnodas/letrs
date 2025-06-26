@@ -1,6 +1,6 @@
 # letrs
 
-Crates for parsing FIGfonts and rendering text using these fonts.
+Rust crates for parsing FIGfonts and rendering text using these fonts.
 
 ## Features
 
@@ -8,17 +8,18 @@ Crates for parsing FIGfonts and rendering text using these fonts.
 - Vertical fitting and smushing
 - Alignment for multi-line output
 - Automatic line breaking depending on maximum width
-- CLI tool: `cargo install letrs-cli`, then run `letrs input`
+- CLI tool: `cargo install letrs-cli`, then run `letrs input` (assuming you have cargo installed)
 
 ## Possible future features
 
 - Control files
 - Performance, both speed and memory usage
 - TOIlet fonts
+- Loading fonts from zip files
 
-## Examples
+## Usage
 
-Using the command line interface:
+From the command line:
 
 ```console
 user@machine:~$ letrs "Hello, world!"
@@ -30,7 +31,7 @@ user@machine:~$ letrs "Hello, world!"
                     |/                                
 ```
 
-Calling library functions in code:
+Calling library functions in rust code:
 
 ```rust
 let font = Font::standard();

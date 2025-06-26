@@ -1,50 +1,45 @@
-use std::str::Chars;
+use std::slice::Iter;
 
 use crate::render::PrintDirection;
 
-pub(crate) trait StrExt {
-    fn last(&self) -> Option<char>;
-    fn bidi_chars(&self, direction: PrintDirection) -> BidiChars<'_>;
+pub(crate) trait BStrExt {
+    fn bidi_chars(&self, direction: PrintDirection) -> BidiBytes<'_>;
 }
 
-impl StrExt for str {
-    fn last(&self) -> Option<char> {
-        self.chars().next_back()
-    }
-
-    fn bidi_chars(&self, direction: PrintDirection) -> BidiChars<'_> {
-        BidiChars::new(self, direction)
+impl BStrExt for [u8] {
+    fn bidi_chars(&self, direction: PrintDirection) -> BidiBytes<'_> {
+        BidiBytes::new(self, direction)
     }
 }
 
-pub(crate) struct BidiChars<'a> {
-    chars: Chars<'a>,
+pub(crate) struct BidiBytes<'a> {
+    bytes: Iter<'a, u8>,
     direction: PrintDirection,
 }
 
-impl<'a> BidiChars<'a> {
-    fn new(string: &'a str, direction: PrintDirection) -> Self {
-        let chars = string.chars();
-        Self { chars, direction }
+impl<'a> BidiBytes<'a> {
+    fn new(string: &'a [u8], direction: PrintDirection) -> Self {
+        let bytes = string.iter();
+        Self { bytes, direction }
     }
 }
 
-impl Iterator for BidiChars<'_> {
-    type Item = char;
+impl Iterator for BidiBytes<'_> {
+    type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.direction {
-            PrintDirection::LeftToRight => self.chars.next(),
-            PrintDirection::RightToLeft => self.chars.next_back(),
+            PrintDirection::LeftToRight => self.bytes.next().copied(),
+            PrintDirection::RightToLeft => self.bytes.next_back().copied(),
         }
     }
 }
 
-impl DoubleEndedIterator for BidiChars<'_> {
+impl DoubleEndedIterator for BidiBytes<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self.direction {
-            PrintDirection::LeftToRight => self.chars.next_back(),
-            PrintDirection::RightToLeft => self.chars.next(),
+            PrintDirection::LeftToRight => self.bytes.next_back().copied(),
+            PrintDirection::RightToLeft => self.bytes.next().copied(),
         }
     }
 }
