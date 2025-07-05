@@ -16,6 +16,11 @@ Rust crates for parsing FIGfonts and rendering text using these fonts.
 - Performance, both speed and memory usage
 - TOIlet fonts
 - Loading fonts from zip files
+- Interactive mode in the CLI
+
+## Non-features
+
+- Perfectly matching figlet output
 
 ## Usage
 
@@ -46,3 +51,8 @@ r"                    |/                                "
 );
 assert_eq!(rendered, expected);
 ```
+
+## Acknowledgements
+
+Thanks to the [pyfiglet](https://github.com/pwaller/pyfiglet) project for organizing the fonts and
+their licenses.
