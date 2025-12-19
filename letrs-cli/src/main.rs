@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     };
     if !success {
         debug_assert!(
-            warnings || cli.width + 2 < font.max_width(),
+            warnings || cli.width < font.max_width(),
             "rendering failed even though char width {} <= max width {}",
             font.max_width(),
             cli.width
