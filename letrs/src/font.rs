@@ -226,14 +226,12 @@ impl Font {
         let (positive, codepoint) = codepoint
             .strip_prefix('-')
             .map_or((true, codepoint), |codepoint| (false, codepoint));
-        #[expect(
-            clippy::option_if_let_else,
-            reason = "nested if let else, with both arms non-trivial"
-        )]
-        let result = if let Some(codepoint) = codepoint.strip_prefix("0x") {
-            u32::from_str_radix(codepoint, 16)
-        } else if codepoint == "0" {
+        let result = if codepoint == "0" {
             Ok(0)
+        } else if let Some(codepoint) = codepoint.strip_prefix("0x") {
+            u32::from_str_radix(codepoint, 16)
+        } else if let Some(codepoint) = codepoint.strip_prefix("0X") {
+            u32::from_str_radix(codepoint, 16)
         } else if let Some(codepoint) = codepoint.strip_prefix("0") {
             u32::from_str_radix(codepoint, 8)
         } else {
