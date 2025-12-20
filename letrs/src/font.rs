@@ -196,6 +196,8 @@ impl Font {
                     );
                 }
                 let character = Character::parse(rows, codepoint, &self.header, warnings)?;
+                // If two or more FIGcharacters have the same character code, the last one in the
+                // FIGfont is the one used. (L1181--1182, figfont.txt)
                 drop(self.characters.insert(codepoint, character));
             } else {
                 drop(self.ignored_characters.insert(
