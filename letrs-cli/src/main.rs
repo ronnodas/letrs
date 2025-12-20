@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "cli output")]
+
 //! CLI for the `letrs` library
 //!
 //! Run as `letrs input` for default settings or use `letrs --help` to see options.
@@ -8,7 +10,7 @@ use std::fs;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use letrs::font::{Font, FontFile};
-use letrs::render::{PrintDirection, Renderer};
+use letrs::render::{self, PrintDirection, Renderer};
 use print_bytes::println_lossy;
 
 fn main() -> Result<()> {
@@ -123,7 +125,7 @@ enum Alignment {
     End,
 }
 
-impl From<Alignment> for letrs::render::Alignment {
+impl From<Alignment> for render::Alignment {
     fn from(value: Alignment) -> Self {
         match value {
             Alignment::Start => Self::Start,
@@ -151,7 +153,7 @@ enum LayoutMode {
     Smush,
 }
 
-impl From<LayoutMode> for letrs::render::LayoutMode {
+impl From<LayoutMode> for render::LayoutMode {
     fn from(value: LayoutMode) -> Self {
         match value {
             LayoutMode::Full => Self::FullSize,

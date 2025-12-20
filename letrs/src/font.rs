@@ -3,7 +3,7 @@
 //! Font types and the logic for parsing `.flf` files.
 
 use std::collections::HashMap;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 
 use bstr::{BString, ByteSlice as _};
 use itertools::Itertools as _;
@@ -185,7 +185,7 @@ impl Font {
                     (codepoint, Some(desc.trim_ascii()))
                 });
             let (codepoint, positive) =
-                Self::parse_codepoint(std::str::from_utf8(codepoint).map_err(|_| {
+                Self::parse_codepoint(str::from_utf8(codepoint).map_err(|_| {
                     FontError::InvalidCharacterCode(BString::new(codepoint.to_owned()))
                 })?)?;
             if positive {
@@ -390,7 +390,7 @@ enum IntParameter {
 
 impl IntParameter {
     fn parse<T: FromStr>(self, bytes: &[u8]) -> Result<T, HeaderError> {
-        std::str::from_utf8(bytes)
+        str::from_utf8(bytes)
             .ok()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| HeaderError::Parse(self.name(), bytes.into()))
