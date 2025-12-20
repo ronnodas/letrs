@@ -182,7 +182,7 @@ impl Font {
             let (codepoint, content) = line
                 .split_once_str(" ")
                 .map_or((line, None), |(codepoint, desc)| {
-                    (codepoint, Some(desc.trim()))
+                    (codepoint, Some(desc.trim_ascii()))
                 });
             let (codepoint, positive) =
                 Self::parse_codepoint(std::str::from_utf8(codepoint).map_err(|_| {
