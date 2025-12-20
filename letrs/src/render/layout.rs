@@ -40,7 +40,7 @@ impl<S: EnumSetType> Layout<S> {
     /// Returns true if *universal smushing* is active.
     ///
     /// When universal smushing, sub-characters from an earlier FIGcharacter are overridden by
-    /// sub-characters from a later FIGcharacter (except if the later subcharacter is a
+    /// sub-characters from a later FIGcharacter (except if the later sub-character is a
     /// [*hardblank*](Hardblank)). This produces an "overlapping" effect with some FIGfonts, whereby
     /// later FIGcharacter may appear to be in front.
     ///
@@ -96,11 +96,11 @@ impl HorizontalLayout {
     /// See [`LayoutDecodeError`] for possible errors.
     ///
     /// This function does not check that `full_layout <= 32767`.
-    #[expect(clippy::missing_panics_doc, reason = "cannot actually panic")]
     pub fn decode(old_layout: i8, full_layout: Option<u16>) -> Result<Self, LayoutDecodeError> {
         let layout = if let Some(full_layout) = full_layout {
             let [_, low] = full_layout.to_be_bytes();
-            let default_mode = LayoutMode::decode(low >> 6).expect("u8 >> 6 is in 0..=3");
+            let default_mode =
+                LayoutMode::decode(low >> 6).unwrap_or_else(|| unreachable!("u8 >> 6 is in 0..=3"));
             match (old_layout, default_mode) {
                 (0..=63, LayoutMode::Smushing)
                 | (0, LayoutMode::Fitting)
@@ -277,8 +277,9 @@ pub enum HorizontalSmushing {
     ///
     /// Same as [`VerticalSmushing::Underscore`].
     Underscore = 1,
-    /// A hierarchy of six classes is used: `|`, `/\`, `[]`, `{}`, `()`, and `<>`. When two smushing
-    /// sub-characters are from different classes, the one from the latter class will be used.
+    /// A hierarchy of six classes is used: `|`, `/\`, `[]`, `{}`, `()`, and `<>` (in that order).
+    /// When smushing two sub-characters from different classes, the one from the latter class will
+    /// be used.
     ///
     /// Same as [`VerticalSmushing::Hierarchy`].
     Hierarchy = 2,
@@ -289,7 +290,7 @@ pub enum HorizontalSmushing {
     OppositePair = 3,
     /// Smushes `/\` into `|`, `\/` into `Y`, and `><` into `X`.
     ///
-    /// Note that here the pairs *are* ordered, in particular `<>` is not affected by this rule.
+    /// Note that here the pairs *are* ordered and in particular, `<>` is not affected by this rule.
     BigX = 4,
     /// Two [hardblanks](Hardblank) are smushed to a single one.
     Hardblank = 5,
@@ -341,10 +342,10 @@ pub enum VerticalSmushing {
     ///
     /// Same as [`HorizontalSmushing::Underscore`].
     Underscore = 1,
-    /// A hierarchy of six classes is used: `|`, `/\`, `[]`, `{}`, `()`, and `<>`.
+    /// A hierarchy of six classes is used: `|`, `/\`, `[]`, `{}`, `()`, and `<>` (in that order).
     ///
-    /// When two smushing sub-characters are from different classes, the one from the latter class
-    /// will be used.
+    /// When smushing two sub-characters from different classes, the one from the latter class will
+    /// be used.
     ///
     /// Same as [`HorizontalSmushing::Hierarchy`].
     Hierarchy = 2,

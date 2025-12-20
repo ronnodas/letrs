@@ -51,7 +51,7 @@ impl Font {
     /// a fatal error.
     ///
     /// # Errors
-    /// See [`FontError`].
+    /// Returns `Err` on a fatal decoding error; see [`FontError`] for details.
     fn from_bytes(font: impl AsRef<[u8]>) -> Result<Self, FontError> {
         Self::from_bytes_with_warnings(font).map(|(font, _)| font)
     }
@@ -64,7 +64,7 @@ impl Font {
     /// may behave unexpectedly, but this is only emitted as a warning and not a fatal error.
     ///
     /// # Errors
-    /// These are fatal decoding errors, see [`FontError`].
+    /// Returns `Err` on a fatal decoding error; see [`FontError`] for details.
     pub fn from_bytes_with_warnings(
         bytes: impl AsRef<[u8]>,
     ) -> Result<(Self, Vec<FontWarning>), FontError> {
@@ -119,21 +119,20 @@ impl Font {
         Self::from_bytes(font.as_bytes()).expect("Should be tested")
     }
 
-    /// Renders a string with default settings provided by the font and no `max_width` (so that the
-    /// choice of alignment is not relevant).
+    /// Renders a string with default settings provided by the font and no `max_width`.
     #[must_use]
     pub fn render(&self, string: &str) -> String {
         Renderer::new(self).render_unbounded(string)
     }
 
-    /// Returns the *comments* portion of the FIGfont, between the header and the FIGcharacters.
-    /// Usually contains information about the font author.
+    /// The *comments* portion of the FIGfont, between the header and the FIGcharacters. Usually
+    /// contains information about the font author.
     #[must_use]
     pub fn comments(&self) -> &str {
         &self.comments
     }
 
-    /// Returns the font header.
+    /// The fully decoded font header.
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
@@ -253,7 +252,7 @@ impl Font {
             .or_else(|| self.characters.get(&0))
     }
 
-    /// The maximum width of any FIGcharacter in this font, measured in sub-characters (bytes).
+    /// The maximum width across all FIGcharacters in this font, measured in sub-characters (bytes).
     #[must_use]
     pub const fn max_width(&self) -> usize {
         self.max_width
@@ -512,13 +511,13 @@ pub enum FontError {
     /// An error in decoding the header
     #[error("Bad header: {0}")]
     BadHeader(#[from] HeaderError),
-    /// A character code cannot be parsed as a `u32`
+    /// An unsigned character code that cannot be parsed as a `u32`
     #[error("{0} is not a valid character code")]
     InvalidCharacterCode(BString),
-    /// A character code is outside the ranges `0..=2147483647` and `-2147483648..-1`
+    /// A character code outside the ranges `0..=2147483647` and `-2147483648..-1`
     #[error("{0}")]
     CharacterCodeOutOfRange(u32),
-    /// A FIGcharacter has an empty row, without an *endmark*
+    /// A FIGcharacter that has an empty row, without an *endmark*
     #[error("empty row in FIGcharacter {0}")]
     EmptyRow(u32),
 }
@@ -532,7 +531,7 @@ pub enum HeaderError {
     /// The header has fewer than the five required parameters (after the signature and hardblank).
     #[error(r#""{0}" does not include enough parameters"#)]
     NotEnoughParameters(BString),
-    /// The header does not begin with "flf2a".
+    /// The header does not begin with `"flf2a"`.
     #[error(r#"{0} does not begin with "flf2a""#)]
     UnknownSignature(BString),
     /// The hardblank is either missing or contains more than one character.

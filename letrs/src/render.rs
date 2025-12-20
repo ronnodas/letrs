@@ -94,9 +94,9 @@ impl<'font> Renderer<'font> {
 
     /// Renders the given string with the given width.
     ///
-    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate (see
-    /// [`FontWarning::ExcessLength`](crate::font::FontWarning::ExcessLength)), the recommended
-    /// minimum for `max_width` is `font.header().max_length - 2`. .
+    /// Returns `None` if `max_width` is too short. The recommended minimum for `max_width` is
+    /// [`font.max_width()`](Font::max_width). For a smaller width, the output may still be `Some`,
+    /// depending on the contents of `string`.
     ///
     /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If a
     /// line goes over `max_width` then it is broken at the last contiguous segment of whitespace
@@ -115,8 +115,9 @@ impl<'font> Renderer<'font> {
 
     /// Renders the given string with the given width as a sequence of bytes.
     ///
-    /// Returns `None` if `max_width` is too short. Assuming the font header is accurate, the
-    /// recommended minimum for `max_width` is `font.header().max_length - 2`.
+    /// Returns `None` if `max_width` is too short. The recommended minimum for `max_width` is
+    /// [`font.max_width()`](Font::max_width). For a smaller width, the output may still be `Some`,
+    /// depending on the contents of `string`.
     ///
     /// See [`render()`](Renderer::render) for details on line breaking.
     #[must_use]
@@ -155,7 +156,8 @@ impl<'font> Renderer<'font> {
 
     /// Renders the given string. The width of each line in the returned string is the maximum width
     /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
-    /// form feed characters).
+    /// form feed characters). If there are no line breaks in the input string then the
+    /// [`Alignment`] is irrelevant.
     ///
     /// In case the font uses characters that are not valid UTF-8 (which you can check using
     /// [`Font::is_utf8`]), consider using
@@ -166,9 +168,12 @@ impl<'font> Renderer<'font> {
         String::from_utf8_lossy(&self.render_bytes_unbounded(string)).into_owned()
     }
 
-    /// Renders the given string as a byte sequence. The width of each line in the returned string
-    /// is the maximum width of the rendered lines of the input (broken at newlines, carriage
-    /// returns, vertical tabs, and form feed characters).
+    /// Renders the given string as a byte sequence.
+    ///
+    /// The width of each "line" (broken by `b'\n'`) in the returned vector is the maximum width of
+    /// the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
+    /// form feed characters). If there are no line breaks in the input string then the
+    /// [`Alignment`] is irrelevant.
     #[must_use]
     pub fn render_bytes_unbounded(&self, mut string: &str) -> Vec<u8> {
         let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
@@ -430,11 +435,11 @@ impl PrintDirection {
     }
 }
 
-/// The choice of rendering alignment
+/// The choice of line alignment for multi-line output
 ///
 /// The alignment is defined relative to the printing direction, so [`Alignment::Start`] will align
-/// text on the left if printing left-to-right and on the right if printing right-to-left. The
-/// opposite for [`Alignment::End`].
+/// text on the left if printing left-to-right and on the right if printing right-to-left (and the
+/// opposite for [`Alignment::End`]).
 ///
 /// The alignment only relevant if a maximum width is set or when rendering text with line breaking
 /// characters (newline, carriage return, vertical tab, and form feed).
