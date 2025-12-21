@@ -72,7 +72,7 @@ impl Cli {
             if let Some(font) = FontFile::from_name(font) {
                 (Font::built_in(font), false)
             } else {
-                let (font, warnings) = Font::from_bytes_with_warnings(&fs::read(font)?)?;
+                let (font, warnings) = Font::new_with_warnings(&fs::read(font)?)?;
                 let any_warnings = !warnings.is_empty();
                 for warning in warnings {
                     println!("WARNING: {warning}");

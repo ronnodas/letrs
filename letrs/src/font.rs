@@ -44,16 +44,16 @@ impl Font {
     /// Decodes the contents of an `.flf` file.
     ///
     /// If unsure about the input being a fully compliant FIGfont, consider
-    /// [`Font::from_str_with_warnings`]; this method is (currently) a convenience wrapper around
+    /// [`Font::new_with_warnings`]; this method is (currently) a convenience wrapper around
     /// that, ignoring the warnings. Notably, if the font has FIGcharacters that do not use the same
     /// number of sub-characters (bytes) per row, the rendering algorithm may behave unexpectedly,
-    /// but this is only emitted as a warning (when using [`Font::from_str_with_warnings`]) and not
+    /// but this is only emitted as a warning (when using [`Font::new_with_warnings`]) and not
     /// a fatal error.
     ///
     /// # Errors
     /// Returns `Err` on a fatal decoding error; see [`FontError`] for details.
-    fn from_bytes(font: impl AsRef<[u8]>) -> Result<Self, FontError> {
-        Self::from_bytes_with_warnings(font).map(|(font, _)| font)
+    pub fn new(font: impl AsRef<[u8]>) -> Result<Self, FontError> {
+        Self::new_with_warnings(font).map(|(font, _)| font)
     }
 
     /// Decodes the contents of an `.flf` file and also returns any non-fatal issues found while
@@ -65,7 +65,7 @@ impl Font {
     ///
     /// # Errors
     /// Returns `Err` on a fatal decoding error; see [`FontError`] for details.
-    pub fn from_bytes_with_warnings(
+    pub fn new_with_warnings(
         bytes: impl AsRef<[u8]>,
     ) -> Result<(Self, Vec<FontWarning>), FontError> {
         let mut warnings = Vec::new();
@@ -115,7 +115,7 @@ impl Font {
     #[expect(clippy::missing_panics_doc, reason = "should be caught in tests")]
     #[must_use]
     pub fn standard() -> Self {
-        Self::from_bytes(Self::STANDARD).expect("Should be tested")
+        Self::new(Self::STANDARD).expect("Should be tested")
     }
 
     /// Decodes a FIGfont from the `letrs-fonts` crate.
@@ -125,7 +125,7 @@ impl Font {
     #[cfg(feature = "fonts")]
     #[must_use]
     pub fn built_in(font: FontFile) -> Self {
-        Self::from_bytes(font.as_bytes()).expect("Should be tested")
+        Self::new(font.as_bytes()).expect("Should be tested")
     }
 
     /// Renders a string with default settings provided by the font and no `max_width`.
@@ -418,7 +418,7 @@ pub(crate) mod tests {
     fn parse_standard() {
         use crate::render::test::{check_horizontal_standard, check_vertical_standard};
 
-        let (font, warnings) = Font::from_bytes_with_warnings(Font::STANDARD).unwrap();
+        let (font, warnings) = Font::new_with_warnings(Font::STANDARD).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(font.header.hardblank, b'$');
         assert_eq!(font.header.height.get(), 6);
@@ -433,7 +433,7 @@ pub(crate) mod tests {
     #[test]
     fn parse_all() {
         for font in FontFile::ALL {
-            let (_font, warnings) = Font::from_bytes_with_warnings(font.as_bytes())
+            let (_font, warnings) = Font::new_with_warnings(font.as_bytes())
                 .unwrap_or_else(|e| panic!("failed to parse {font:?}: {e:?}"));
             assert_eq!(warnings, [], "warnings produced when parsing {font:?}",);
         }
