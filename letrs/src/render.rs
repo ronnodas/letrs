@@ -205,7 +205,7 @@ impl<'font> Renderer<'font> {
         mut string: &'a str,
         max_width: Option<usize>,
     ) -> (Vec<Vec<u8>>, usize, &'a str) {
-        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height];
+        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height.get()];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;
@@ -280,7 +280,7 @@ impl<'font> Renderer<'font> {
         mut string: &'a str,
         max_width: Option<usize>,
     ) -> (Vec<Vec<u8>>, usize, &'a str) {
-        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height];
+        let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height.get()];
         let mut width = 0;
         let mut chars = string.chars();
         let mut before_space = None;

@@ -3,6 +3,7 @@
 //! Font types and the logic for parsing `.flf` files.
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::str::{self, FromStr};
 
 use bstr::{BString, ByteSlice as _};
@@ -159,8 +160,8 @@ impl Font {
     ) -> Result<(), FontError> {
         let default_char_chunks = lines
             .by_ref()
-            .take(DEFAULT_CODEPOINTS.len() * self.header.height)
-            .chunks(self.header.height);
+            .take(DEFAULT_CODEPOINTS.len() * self.header.height.get())
+            .chunks(self.header.height.get());
         for (codepoint, rows) in DEFAULT_CODEPOINTS
             .into_iter()
             .zip(default_char_chunks.into_iter())
@@ -172,7 +173,7 @@ impl Font {
             warnings.push(FontWarning::MissingDefaultCharacters(self.characters.len()));
         }
         let mut processed_chars = 0;
-        for mut rows in &lines.by_ref().chunks(self.header.height + 1) {
+        for mut rows in &lines.by_ref().chunks(self.header.height.get() + 1) {
             let line = rows.next().expect("chunk size >= 1");
 
             let (codepoint, content) = line
@@ -262,10 +263,10 @@ pub struct Header {
     /// The *hardblank* character; see [`Hardblank`] and
     /// [`HorizontalSmushing`](crate::render::HorizontalSmushing) for its significance in rendering.
     pub hardblank: Hardblank,
-    /// Number of rows of sub-characters in each FIGcharacter. Must be at least 1. Note that *all*
-    /// FIGcharacters in a given FIGfont have the same height, since this includes any empty space
-    /// above or below.
-    pub height: usize,
+    /// Number of rows of sub-characters in each FIGcharacter. Note that *every* FIGcharacter in a
+    /// given FIGfont has the same height, and this includes any empty space above or below the
+    /// glyph.
+    pub height: NonZero<usize>,
     /// The number of lines of sub-characters from the baseline of a FIGcharacter to the top of the
     /// tallest FIGcharacter. The baseline of a FIGfont is an imaginary line on top of which capital
     /// letters would rest, while the *descenders* of characters such as lowercase g, j, p, q, and y
@@ -334,15 +335,14 @@ impl Header {
         let hardblank = hardblank
             .try_into()
             .map_err(HeaderError::InvalidHardblankChar)?;
-        let height = IntParameter::Height.parse(height)?;
-        if height == 0 {
+        let Some(height) = NonZero::new(IntParameter::Height.parse(height)?) else {
             return Err(HeaderError::ZeroHeight);
-        }
+        };
         let baseline = IntParameter::Baseline.parse(baseline).unwrap_or_else(|_| {
             warnings.push(FontWarning::Baseline(baseline.into()));
             1
         });
-        if !(0 < baseline && baseline <= height) {
+        if !(0 < baseline && baseline <= height.get()) {
             warnings.push(FontWarning::BaselineOutOfRange { baseline, height });
         }
         let max_length = IntParameter::MaxLength.parse(max_length)?;
@@ -569,7 +569,7 @@ pub enum FontWarning {
         /// The baseline parameter
         baseline: usize,
         /// The height parameter
-        height: usize,
+        height: NonZero<usize>,
     },
     /// The font has fewer than the required 102 FIGcharacters
     #[error("Not enough required FIGcharacters, found {0}, expected 102")]
@@ -624,7 +624,7 @@ pub(crate) mod tests {
         let (font, warnings) = Font::from_bytes_with_warnings(Font::STANDARD).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(font.header.hardblank, b'$');
-        assert_eq!(font.header.height, 6);
+        assert_eq!(font.header.height.get(), 6);
         assert_eq!(font.header.baseline, 5);
         assert_eq!(font.header.max_length, 16);
 
