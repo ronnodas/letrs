@@ -18,13 +18,10 @@ use crate::render::{
 /// The 102 codepoints for characters that are included in all FIGfonts
 ///
 /// Consists of 95 printable ASCII characters and 7 Deutsch characters from the Latin-1 encoding.
-pub const DEFAULT_CODEPOINTS: [u32; 102] = [
-    32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
-    56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
-    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102,
-    103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121,
-    122, 123, 124, 125, 126, 196, 214, 220, 228, 246, 252, 223,
-];
+pub const DEFAULT_CODEPOINTS: [u8; 102] = *b" !\"#$%&'()*+,-./0123456789:;<=>?@\
+                                             ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`\
+                                             abcdefghijklmnopqrstuvwxyz{|}~\
+                                             \xc4\xd6\xdc\xe4\xf6\xfc\xdf";
 
 /// A FIGfont
 #[derive(Debug)]
@@ -168,8 +165,8 @@ impl Font {
             .into_iter()
             .zip(default_char_chunks.into_iter())
         {
-            let character = Character::parse(rows, codepoint, &self.header, warnings)?;
-            drop(self.characters.insert(codepoint, character));
+            let character = Character::parse(rows, codepoint.into(), &self.header, warnings)?;
+            drop(self.characters.insert(codepoint.into(), character));
         }
         if self.characters.len() != DEFAULT_CODEPOINTS.len() {
             warnings.push(FontWarning::MissingDefaultCharacters(self.characters.len()));
