@@ -80,7 +80,7 @@ impl Font {
         let Some(header_line) = lines.next() else {
             return Err(FontError::BadHeader(HeaderError::Missing));
         };
-        let (header, bad_baseline) = Header::decode(header_line)?;
+        let (header, bad_baseline) = Header::decode_inner(header_line)?;
         if let Some(baseline) = header.baseline {
             let height = header.height;
             if baseline == 0 || baseline > height.get() {

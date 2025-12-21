@@ -53,7 +53,15 @@ pub struct Header {
 }
 
 impl Header {
-    pub(crate) fn decode(header_line: &[u8]) -> Result<(Self, Option<BString>), HeaderError> {
+    /// Decode a header from its binary encoding.
+    ///
+    /// # Errors
+    /// Any fatal decoding errors, see [`HeaderError`] for details.
+    pub fn decode(header_line: impl AsRef<[u8]>) -> Result<Self, HeaderError> {
+        Self::decode_inner(header_line.as_ref()).map(|(header, _)| header)
+    }
+
+    pub(crate) fn decode_inner(header_line: &[u8]) -> Result<(Self, Option<BString>), HeaderError> {
         let mut parameters = header_line
             .split(|&c| c == b' ')
             .filter(|parameter| !parameter.is_empty());
