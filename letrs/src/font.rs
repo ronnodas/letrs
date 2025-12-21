@@ -5,6 +5,7 @@
 mod header;
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::str;
 
 use bstr::{BString, ByteSlice as _};
@@ -15,7 +16,7 @@ use thiserror::Error;
 
 use crate::render::Renderer;
 
-pub use header::{Hardblank, Header, HeaderError, HeaderWarning, PrintDirection};
+pub use header::{Hardblank, Header, HeaderError, PrintDirection};
 
 /// The 102 codepoints for characters that are included in all FIGfonts
 ///
@@ -79,7 +80,16 @@ impl Font {
         let Some(header_line) = lines.next() else {
             return Err(FontError::BadHeader(HeaderError::Missing));
         };
-        let header = Header::decode(header_line, &mut warnings)?;
+        let (header, bad_baseline) = Header::decode(header_line)?;
+        if let Some(baseline) = header.baseline {
+            let height = header.height;
+            if baseline == 0 || baseline > height.get() {
+                warnings.push(FontWarning::BaselineOutOfRange { baseline, height });
+            }
+        } else {
+            let bad_baseline = bad_baseline.unwrap_or_else(|| unreachable!());
+            warnings.push(FontWarning::Baseline(bad_baseline));
+        }
         let comments =
             String::from_utf8_lossy(&bstr::join("\n", lines.by_ref().take(header.comment_lines)))
                 .into_owned();
@@ -176,7 +186,6 @@ impl Font {
         let mut processed_chars = 0;
         for mut rows in &lines.by_ref().chunks(self.header.height.get() + 1) {
             let line = rows.next().expect("chunk size >= 1");
-
             let (codepoint, content) = line
                 .split_once_str(" ")
                 .map_or((line, None), |(codepoint, desc)| {
@@ -344,9 +353,17 @@ pub enum FontError {
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FontWarning {
-    /// A warning in decoding the header
-    #[error("{0}")]
-    Header(#[from] HeaderWarning),
+    /// The baseline parameter cannot be parsed as a `usize`.
+    #[error(r#"could not parse "{0}" as the baseline parameter"#)]
+    Baseline(BString),
+    /// The baseline parameter is not between 1 and the height parameter (inclusive).
+    #[error("baseline {baseline} not between 1 and {height} (height)")]
+    BaselineOutOfRange {
+        /// The baseline parameter
+        baseline: usize,
+        /// The height parameter
+        height: NonZero<usize>,
+    },
     /// A FIGcharacter contains a non-ASCII sub-character. This may cause issues with rendering and
     /// alignment, since the widths are measured in `char`s.
     #[error("the character with code {0} contains a non-ascii character on row {1}")]
@@ -405,7 +422,7 @@ pub(crate) mod tests {
         assert!(warnings.is_empty());
         assert_eq!(font.header.hardblank, b'$');
         assert_eq!(font.header.height.get(), 6);
-        assert_eq!(font.header.baseline, 5);
+        assert_eq!(font.header.baseline, Some(5));
         assert_eq!(font.header.max_length, 16);
 
         check_horizontal_standard(font.header.horizontal_layout);

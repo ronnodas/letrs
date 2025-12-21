@@ -25,9 +25,11 @@ pub struct Header {
     ///
     /// This parameter does not affect the rendered output.
     ///
+    /// If `None` then this parameter could not be parsed as a non-negative integer; see
+    /// [`FontWarning::Baseline`](crate::font::FontWarning::Baseline). If `Some` then the value
     /// Should be between 1 and [`height`](Header::height) inclusive; see
-    /// [`HeaderWarning::BaselineOutOfRange`].
-    pub baseline: usize,
+    /// [`FontWarning::BaselineOutOfRange`](`crate::font::FontWarning::BaselineOutOfRange`).
+    pub baseline: Option<usize>,
     /// An upper bound for the length of each row of each FIGcharacter in the font. This is expected
     /// to be the width of the widest FIGcharacter, plus 2 (to accommodate *endmarks*); see
     /// [`FontWarning::ExcessLength`](crate::font::FontWarning::ExcessLength). Use
@@ -51,10 +53,7 @@ pub struct Header {
 }
 
 impl Header {
-    pub(crate) fn decode<W>(header_line: &[u8], warnings: &mut Vec<W>) -> Result<Self, HeaderError>
-    where
-        HeaderWarning: Into<W>,
-    {
+    pub(crate) fn decode(header_line: &[u8]) -> Result<(Self, Option<BString>), HeaderError> {
         let mut parameters = header_line
             .split(|&c| c == b' ')
             .filter(|parameter| !parameter.is_empty());
@@ -90,13 +89,11 @@ impl Header {
         let Some(height) = NonZero::new(IntParameter::Height.parse(height)?) else {
             return Err(HeaderError::ZeroHeight);
         };
-        let baseline = IntParameter::Baseline.parse(baseline).unwrap_or_else(|_| {
-            warnings.push(HeaderWarning::Baseline(baseline.into()).into());
-            1
-        });
-        if !(0 < baseline && baseline <= height.get()) {
-            warnings.push(HeaderWarning::BaselineOutOfRange { baseline, height }.into());
-        }
+        let (baseline, bad_baseline) = IntParameter::Baseline.parse(baseline).map_or_else(
+            |_| (None, Some(baseline.into())),
+            |baseline| (Some(baseline), None),
+        );
+
         let max_length = IntParameter::MaxLength.parse(max_length)?;
         let comment_lines = IntParameter::CommentLines.parse(comment_lines)?;
         let old_layout = IntParameter::OldLayout.parse(old_layout)?;
@@ -121,7 +118,7 @@ impl Header {
             print_direction,
             code_tag_count,
         };
-        Ok(header)
+        Ok((header, bad_baseline))
     }
 }
 
@@ -244,21 +241,4 @@ pub enum HeaderError {
     /// The height parameter is 0
     #[error("height parameter is 0")]
     ZeroHeight,
-}
-
-/// A non-fatal issue with an encoded Header
-#[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum HeaderWarning {
-    /// The baseline parameter cannot be parsed as a `usize`.
-    #[error(r#"could not parse "{0}" as the baseline parameter"#)]
-    Baseline(BString),
-    /// The baseline parameter is not between 1 and the height parameter (inclusive).
-    #[error("baseline {baseline} not between 1 and {height} (height)")]
-    BaselineOutOfRange {
-        /// The baseline parameter
-        baseline: usize,
-        /// The height parameter
-        height: NonZero<usize>,
-    },
 }
