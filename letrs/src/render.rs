@@ -7,7 +7,7 @@ use std::mem;
 
 use itertools::izip;
 
-use crate::font::{Font, Hardblank, Header, HeaderError};
+use crate::font::{Font, Hardblank, Header, PrintDirection};
 use crate::str_ext::BStrExt as _;
 
 pub use layout::{
@@ -24,8 +24,8 @@ const LINE_BREAKS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 ///
 /// The methods are meant to be used in a builder pattern:
 /// ```
-/// # use letrs::font::Font;
-/// # use letrs::render::{Alignment, LayoutMode, PrintDirection, Renderer};
+/// # use letrs::font::{Font, PrintDirection};
+/// # use letrs::render::{Alignment, LayoutMode, Renderer};
 /// let font = Font::standard();
 /// let rendered = Renderer::new(&font)
 ///     .alignment(Alignment::Center)
@@ -408,30 +408,6 @@ impl<'font> Renderer<'font> {
             .map(|row| row.into_iter().take_while(|&c| c == b' ').count())
             .min()
             .unwrap_or(0)
-    }
-}
-
-/// Printing direction, left-to-right or right-to-left
-///
-/// Each font specifies a default, found in `font.header().print_direction`. This also affects the
-/// meaning of [`Alignment`].
-///
-/// The rendered string should always be interpreted left-to-right.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrintDirection {
-    /// Left-to-right
-    LeftToRight,
-    /// Right-to-left
-    RightToLeft,
-}
-
-impl PrintDirection {
-    pub(crate) fn decode(print_direction: Option<&[u8]>) -> Result<Self, HeaderError> {
-        Ok(match print_direction {
-            None | Some(b"0") => Self::LeftToRight,
-            Some(b"1") => Self::RightToLeft,
-            Some(other) => return Err(HeaderError::PrintDirection(other.into())),
-        })
     }
 }
 

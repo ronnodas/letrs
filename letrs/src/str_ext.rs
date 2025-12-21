@@ -1,6 +1,6 @@
 use std::slice::Iter;
 
-use crate::render::PrintDirection;
+use crate::font::PrintDirection;
 
 pub(crate) trait BStrExt {
     fn bidi_chars(&self, direction: PrintDirection) -> BidiBytes<'_>;

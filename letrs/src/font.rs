@@ -12,9 +12,7 @@ use itertools::Itertools as _;
 pub use letrs_fonts::FontFile;
 use thiserror::Error;
 
-use crate::render::{
-    HorizontalLayout, LayoutDecodeError, PrintDirection, Renderer, VerticalLayout,
-};
+use crate::render::{HorizontalLayout, LayoutDecodeError, Renderer, VerticalLayout};
 
 /// The 102 codepoints for characters that are included in all FIGfonts
 ///
@@ -370,6 +368,30 @@ impl Header {
             code_tag_count,
         };
         Ok(header)
+    }
+}
+
+/// Printing direction, left-to-right or right-to-left
+///
+/// Each font specifies a default, found in `font.header().print_direction`. This also affects the
+/// meaning of [`Alignment`](crate::render::Alignment).
+///
+/// The rendered string should always be interpreted left-to-right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintDirection {
+    /// Left-to-right
+    LeftToRight,
+    /// Right-to-left
+    RightToLeft,
+}
+
+impl PrintDirection {
+    pub(crate) fn decode(print_direction: Option<&[u8]>) -> Result<Self, HeaderError> {
+        Ok(match print_direction {
+            None | Some(b"0") => Self::LeftToRight,
+            Some(b"1") => Self::RightToLeft,
+            Some(other) => return Err(HeaderError::PrintDirection(other.into())),
+        })
     }
 }
 

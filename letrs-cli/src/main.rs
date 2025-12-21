@@ -9,8 +9,8 @@ use std::fs;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use letrs::font::{Font, FontFile};
-use letrs::render::{self, PrintDirection, Renderer};
+use letrs::font::{Font, FontFile, PrintDirection};
+use letrs::render::{self, Renderer};
 use print_bytes::println_lossy;
 
 fn main() -> Result<()> {
