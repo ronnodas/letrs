@@ -14,7 +14,7 @@ use itertools::Itertools as _;
 pub use letrs_fonts::FontFile;
 use thiserror::Error;
 
-use crate::render::Renderer;
+use crate::render::{Renderer, Unbounded};
 
 pub use header::{Hardblank, Header, HeaderError, PrintDirection};
 
@@ -132,6 +132,13 @@ impl Font {
     #[must_use]
     pub fn render(&self, string: &str) -> String {
         Renderer::new(self).render(string)
+    }
+
+    /// Renderer using this font and default settings.
+    ///
+    /// Convenience wrapper around [`Renderer::new`].
+    pub const fn renderer(&self) -> Renderer<'_, Unbounded> {
+        Renderer::new(self)
     }
 
     /// The *comments* portion of the FIGfont, between the header and the FIGcharacters. Usually
