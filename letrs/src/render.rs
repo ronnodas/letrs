@@ -1025,4 +1025,14 @@ _|_|_  _  | _._     _| _  _
                 /         _|                                           ";
         assert_eq!(rendered, expected);
     }
+
+    #[test]
+    fn multi_inputs() {
+        let binding = Font::standard();
+        let renderer = binding.renderer();
+        let _: String = renderer.render("Use it once");
+        let renderer = renderer.max_width(25);
+        let _: Option<String> = renderer.render("only consumes copy");
+        let _: Option<String> = renderer.render("still Copy");
+    }
 }
