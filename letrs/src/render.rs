@@ -19,20 +19,19 @@ const LINE_BREAKS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 
 /// The main type for rendering
 ///
-/// Use either [`render()`](Renderer::render) or [`render_unbounded()`](Renderer::render_unbounded)
-/// to render output.
+/// Use [`render()`](Renderer::render) to process strings.
 ///
-/// The methods are meant to be used in a builder pattern:
+/// The other methods are meant to be used in a builder pattern:
 /// ```
 /// # use letrs::font::{Font, PrintDirection};
 /// # use letrs::render::{Alignment, LayoutMode, Renderer};
 /// let font = Font::standard();
-/// let rendered = Renderer::new(&font)
+/// let rendered: String = Renderer::new(&font)
 ///     .alignment(Alignment::Center)
 ///     .print_direction(PrintDirection::RightToLeft)
 ///     .horizontal_layout(LayoutMode::Fitting)
 ///     .vertical_layout(LayoutMode::FullSize)
-///     .render_unbounded("Hello,\nworld!");
+///     .render("Hello,\nworld!");
 /// let expected = concat!(
 /// r"             _  _        _   _    ", "\n",
 /// r"       ___  | || |  ___ | | | |   ", "\n",
@@ -49,162 +48,57 @@ const LINE_BREAKS: [char; 4] = ['\n', '\r', '\x11', '\x12'];
 /// );
 /// assert_eq!(rendered, expected);
 /// ```
-#[derive(Debug, Clone)]
-pub struct Renderer<'font> {
+#[must_use]
+#[derive(Debug, Clone, Copy)]
+pub struct Renderer<'font, W> {
     font: &'font Font,
     config: Config,
+    width: W,
 }
 
-impl<'font> Renderer<'font> {
-    /// Creates a new renderer. The default alignment is [`Alignment::Start`]; the rest of the
-    /// settings are taken from the font.
-    #[must_use]
-    pub const fn new(font: &'font Font) -> Self {
-        let config = Config::from_header(font.header());
-        Self { font, config }
-    }
-
+impl<W: WidthConfig> Renderer<'_, W> {
     /// Sets the print direction.
-    #[must_use]
     pub const fn print_direction(mut self, direction: PrintDirection) -> Self {
         self.config.direction = direction;
         self
     }
 
     /// Sets the alignment.
-    #[must_use]
     pub const fn alignment(mut self, alignment: Alignment) -> Self {
         self.config.alignment = alignment;
         self
     }
 
     /// Sets the horizontal layout mode.
-    #[must_use]
     pub const fn horizontal_layout(mut self, mode: LayoutMode) -> Self {
         self.config.horizontal_layout.set_mode(mode);
         self
     }
 
     /// Sets the vertical layout mode.
-    #[must_use]
     pub const fn vertical_layout(mut self, mode: LayoutMode) -> Self {
         self.config.vertical_layout.set_mode(mode);
         self
     }
 
-    /// Renders the given string with the given width.
+    /// Renders the given string.
     ///
-    /// Returns `None` if `max_width` is too short. The recommended minimum for `max_width` is
-    /// [`font.max_width()`](Font::max_width). For a smaller width, the output may still be `Some`,
-    /// depending on the contents of `string`.
+    /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If
+    /// `max_width` is set, any line that is too long is broken at the last contiguous segment of
+    /// whitespace (spaces and tabs) if any, in which case that segment of whitespace is trimmed
+    /// appropriately. If there is no such whitespace, then the line will be broken in the middle of
+    /// a "word" (but never in the middle of a FIGcharacter), at the latest possible position.
     ///
-    /// A newline (or carriage return, vertical tab, or form feed) always causes a line break. If a
-    /// line goes over `max_width` then it is broken at the last contiguous segment of whitespace
-    /// (spaces and tabs) on that line if any, in which case that segment of whitespace is not
-    /// rendered. Otherwise the line will be broken in the middle of a "word" (but never in the
-    /// middle of a FIGcharacter), at the latest possible position.
-    ///
-    /// In case the font uses characters that are not valid UTF-8 (which you can check using
-    /// [`Font::is_utf8`]), consider using [`render_bytes()`](Renderer::render_bytes) instead. This
-    /// method is a convenience wrapper around it using [`String::from_utf8_lossy`].
-    #[must_use]
-    pub fn render(&self, string: &str, max_width: usize) -> Option<String> {
-        self.render_bytes(string, max_width)
-            .map(|output| String::from_utf8_lossy(&output).into_owned())
+    /// The output type can be:
+    /// * [`Vec<u8>`]: recommended in case the font uses characters that are not valid UTF-8 (which
+    ///   you can check using [`Font::is_utf8`]);
+    /// * [`String`]: a convenience wrapper using [`String::from_utf8_lossy`] after rendering as
+    ///   [`Vec<u8>`].
+    pub fn render<Output: RenderOutput>(self, string: &str) -> W::Output<Output> {
+        W::map(W::render_bytes(self, string))
     }
 
-    /// Renders the given string with the given width as a sequence of bytes.
-    ///
-    /// Returns `None` if `max_width` is too short. The recommended minimum for `max_width` is
-    /// [`font.max_width()`](Font::max_width). For a smaller width, the output may still be `Some`,
-    /// depending on the contents of `string`.
-    ///
-    /// See [`render()`](Renderer::render) for details on line breaking.
-    #[must_use]
-    pub fn render_bytes(&self, mut string: &str, max_width: usize) -> Option<Vec<u8>> {
-        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
-        let mut width = if self.config.alignment == Alignment::Start {
-            0
-        } else {
-            max_width
-        };
-        while !string.is_empty() {
-            let (line, line_width, rest) = if self.config.full_width() {
-                self.render_line_full_width(string, Some(max_width))
-            } else {
-                self.render_line(string, Some(max_width))
-            };
-            if rest == string {
-                return None;
-            }
-            lines.push(line);
-            debug_assert!(line_width <= max_width, "rendered line too wide");
-            width = width.max(line_width);
-            string = rest;
-        }
-        for row in lines.iter_mut().flatten() {
-            for c in row.iter_mut() {
-                if self.font.header().hardblank == *c {
-                    *c = b' ';
-                }
-            }
-            *row = self.config.alignment.pad(mem::take(row), width);
-        }
-        let rows = self.stack(lines, width);
-        Some(self.join(rows))
-    }
-
-    /// Renders the given string. The width of each line in the returned string is the maximum width
-    /// of the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
-    /// form feed characters). If there are no line breaks in the input string then the
-    /// [`Alignment`] is irrelevant.
-    ///
-    /// In case the font uses characters that are not valid UTF-8 (which you can check using
-    /// [`Font::is_utf8`]), consider using
-    /// [`render_bytes_unbounded()`](Renderer::render_bytes_unbounded) instead. This method is a
-    /// convenience wrapper around it using [`String::from_utf8_lossy`].
-    #[must_use]
-    pub fn render_unbounded(&self, string: &str) -> String {
-        String::from_utf8_lossy(&self.render_bytes_unbounded(string)).into_owned()
-    }
-
-    /// Renders the given string as a byte sequence.
-    ///
-    /// The width of each "line" (broken by `b'\n'`) in the returned vector is the maximum width of
-    /// the rendered lines of the input (broken at newlines, carriage returns, vertical tabs, and
-    /// form feed characters). If there are no line breaks in the input string then the
-    /// [`Alignment`] is irrelevant.
-    #[must_use]
-    pub fn render_bytes_unbounded(&self, mut string: &str) -> Vec<u8> {
-        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
-        let mut width = 0;
-        while !string.is_empty() {
-            let (line, line_width, rest) = if self.config.full_width() {
-                self.render_line_full_width(string, None)
-            } else {
-                self.render_line(string, None)
-            };
-            lines.push(line);
-            width = width.max(line_width);
-            string = rest;
-        }
-        for row in lines.iter_mut().flatten() {
-            for c in row.iter_mut() {
-                if self.font.header().hardblank == *c {
-                    *c = b' ';
-                }
-            }
-            *row = self.config.alignment.pad(mem::take(row), width);
-        }
-        let rows = self.stack(lines, width);
-        self.join(rows)
-    }
-
-    fn render_line<'a>(
-        &self,
-        mut string: &'a str,
-        max_width: Option<usize>,
-    ) -> (Vec<Vec<u8>>, usize, &'a str) {
+    fn render_line<'a>(&self, mut string: &'a str) -> (Vec<Vec<u8>>, usize, &'a str) {
         let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height.get()];
         let mut width = 0;
         let mut chars = string.chars();
@@ -220,7 +114,7 @@ impl<'font> Renderer<'font> {
                 string = chars.as_str();
                 break;
             }
-            let appended = self.append(&mut line, &mut width, c, max_width);
+            let appended = self.append(&mut line, &mut width, c);
             if !appended {
                 overfull = true;
                 break;
@@ -244,13 +138,7 @@ impl<'font> Renderer<'font> {
         (line, width, string)
     }
 
-    fn append(
-        &self,
-        line: &mut Vec<Vec<u8>>,
-        width: &mut usize,
-        c: char,
-        max_width: Option<usize>,
-    ) -> bool {
+    fn append(&self, line: &mut Vec<Vec<u8>>, width: &mut usize, c: char) -> bool {
         let Some(character) = self.font.get(c) else {
             return true;
         };
@@ -265,7 +153,11 @@ impl<'font> Renderer<'font> {
             .iter()
             .map(|row| row.bidi_chars(self.config.direction).rev());
         let trim = Self::trimming(char_rows_rev);
-        if max_width.is_some_and(|max_width| *width + character.width - trim - shift > max_width) {
+        if self
+            .width
+            .as_option()
+            .is_some_and(|max_width| *width + character.width - trim - shift > max_width)
+        {
             return false;
         }
         *width = *width + character.width - shift;
@@ -275,11 +167,7 @@ impl<'font> Renderer<'font> {
         true
     }
 
-    fn render_line_full_width<'a>(
-        &self,
-        mut string: &'a str,
-        max_width: Option<usize>,
-    ) -> (Vec<Vec<u8>>, usize, &'a str) {
+    fn render_line_full_width<'a>(&self, mut string: &'a str) -> (Vec<Vec<u8>>, usize, &'a str) {
         let mut line: Vec<Vec<u8>> = vec![Vec::new(); self.font.header().height.get()];
         let mut width = 0;
         let mut chars = string.chars();
@@ -299,7 +187,11 @@ impl<'font> Renderer<'font> {
             let Some(character) = self.font.get(c) else {
                 continue;
             };
-            if max_width.is_some_and(|max_width| character.width + width > max_width) {
+            if self
+                .width
+                .as_option()
+                .is_some_and(|max_width| character.width + width > max_width)
+            {
                 overfull = true;
                 break;
             }
@@ -408,6 +300,174 @@ impl<'font> Renderer<'font> {
             .map(|row| row.into_iter().take_while(|&c| c == b' ').count())
             .min()
             .unwrap_or(0)
+    }
+}
+
+impl<'font> Renderer<'font, Unbounded> {
+    /// Creates a new renderer. The default alignment is [`Alignment::Start`]; the rest of the
+    /// settings are taken from the font.
+    pub const fn new(font: &'font Font) -> Self {
+        let config = Config::from_header(font.header());
+        Self {
+            font,
+            config,
+            width: Unbounded,
+        }
+    }
+
+    /// Set a maximum width (in bytes) for the output. This changes the output type to [`Option`]
+    /// since there might be characters that cannot fit in the specified width. The recommended
+    /// minimum for `width` is [`font.max_width()`](Font::max_width). For a smaller width, the
+    /// output may still be `Some`, depending on the input string being rendered.
+    pub const fn max_width(self, width: usize) -> Renderer<'font, Bounded> {
+        Renderer {
+            font: self.font,
+            config: self.config,
+            width: Bounded(width),
+        }
+    }
+
+    #[must_use]
+    fn render_bytes(&self, mut string: &str) -> Vec<u8> {
+        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
+        let mut width = 0;
+        while !string.is_empty() {
+            let (line, line_width, rest) = if self.config.full_width() {
+                self.render_line_full_width(string)
+            } else {
+                self.render_line(string)
+            };
+            lines.push(line);
+            width = width.max(line_width);
+            string = rest;
+        }
+        for row in lines.iter_mut().flatten() {
+            for c in row.iter_mut() {
+                if self.font.header().hardblank == *c {
+                    *c = b' ';
+                }
+            }
+            *row = self.config.alignment.pad(mem::take(row), width);
+        }
+        let rows = self.stack(lines, width);
+        self.join(rows)
+    }
+}
+
+impl Renderer<'_, Bounded> {
+    #[must_use]
+    fn render_bytes(&self, mut string: &str) -> Option<Vec<u8>> {
+        let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
+        let mut width = if self.config.alignment == Alignment::Start {
+            0
+        } else {
+            self.width.0
+        };
+        while !string.is_empty() {
+            let (line, line_width, rest) = if self.config.full_width() {
+                self.render_line_full_width(string)
+            } else {
+                self.render_line(string)
+            };
+            if rest == string {
+                return None;
+            }
+            lines.push(line);
+            debug_assert!(line_width <= self.width.0, "rendered line too wide");
+            width = width.max(line_width);
+            string = rest;
+        }
+        for row in lines.iter_mut().flatten() {
+            for c in row.iter_mut() {
+                if self.font.header().hardblank == *c {
+                    *c = b' ';
+                }
+            }
+            *row = self.config.alignment.pad(mem::take(row), width);
+        }
+        let rows = self.stack(lines, width);
+        Some(self.join(rows))
+    }
+}
+
+/// Trait to generically bound the renderer output
+///
+/// Implementations are provided for [`Vec<u8>`] and [`String`]. Effectively a version of
+/// [`From<Vec<u8>>`].
+pub trait RenderOutput {
+    /// Convert the byte level rendered output.
+    fn from_bytes(bytes: Vec<u8>) -> Self;
+}
+
+impl RenderOutput for Vec<u8> {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        bytes
+    }
+}
+
+impl RenderOutput for String {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// Trait for setting the width in a type-safe manner
+///
+/// Currently only implemented for the newtypes [`Bounded`] and [`Unbounded`], but could in
+/// principle also be implemented for a type like [`Option<usize>`].
+pub trait WidthConfig: Sized {
+    /// Generic wrapper for the output type. Needed because bounding the width makes the rendering
+    /// fallible.
+    type Output<O>;
+
+    /// Run the rendering algorithm.
+    fn render_bytes(renderer: Renderer<'_, Self>, string: &str) -> Self::Output<Vec<u8>>;
+    /// Convert the wrapped output to the generically specified type.
+    fn map<O: RenderOutput>(bytes: Self::Output<Vec<u8>>) -> Self::Output<O>;
+    /// `Some(width)` on [`Bounded`], `None` on [`Unbounded`], used dynamically by the rendering
+    /// algorithm.
+    fn as_option(&self) -> Option<usize>;
+}
+
+/// Statically denotes that the output width is unbounded
+#[derive(Debug, Clone, Copy)]
+pub struct Unbounded;
+
+impl WidthConfig for Unbounded {
+    type Output<O> = O;
+
+    fn render_bytes(renderer: Renderer<'_, Self>, string: &str) -> Vec<u8> {
+        renderer.render_bytes(string)
+    }
+
+    fn map<O: RenderOutput>(bytes: Vec<u8>) -> O {
+        O::from_bytes(bytes)
+    }
+
+    fn as_option(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// Statically denotes that the output width is bounded
+///
+/// See [`Renderer::max_width`] and [`Renderer::render`] for the effect on output and output types.
+#[derive(Debug, Clone, Copy)]
+pub struct Bounded(usize);
+
+impl WidthConfig for Bounded {
+    type Output<O> = Option<O>;
+
+    fn render_bytes(renderer: Renderer<'_, Self>, string: &str) -> Option<Vec<u8>> {
+        renderer.render_bytes(string)
+    }
+
+    fn map<O: RenderOutput>(bytes: Option<Vec<u8>>) -> Option<O> {
+        bytes.map(O::from_bytes)
+    }
+
+    fn as_option(&self) -> Option<usize> {
+        Some(self.0)
     }
 }
 
@@ -845,9 +905,9 @@ pub(crate) mod test {
 
     #[test]
     fn hello_world_flipped() {
-        let rendered = Renderer::new(&Font::standard())
+        let rendered: String = Renderer::new(&Font::standard())
             .print_direction(PrintDirection::RightToLeft)
-            .render_unbounded("Hello, world!");
+            .render("Hello, world!");
         let expected = r" _     _ _                            _ _      _   _ 
 | | __| | |_ __ _____      __    ___ | | | ___| | | |
 | |/ _` | | '__/ _ \ \ /\ / /   / _ \| | |/ _ \ |_| |
@@ -873,9 +933,9 @@ pub(crate) mod test {
 
     #[test]
     fn center_align() {
-        let rendered = Renderer::new(&Font::standard())
+        let rendered: String = Renderer::new(&Font::standard())
             .alignment(Alignment::Center)
-            .render_unbounded("short\ncomparatively long");
+            .render("short\ncomparatively long");
         let expected = r"                                    _                _                                   
                                 ___| |__   ___  _ __| |_                                 
                                / __| '_ \ / _ \| '__| __|                                
@@ -891,9 +951,9 @@ pub(crate) mod test {
 
     #[test]
     fn end_align() {
-        let rendered = Renderer::new(&Font::standard())
+        let rendered: String = Renderer::new(&Font::standard())
             .alignment(Alignment::End)
-            .render_unbounded("short\ncomparatively long");
+            .render("short\ncomparatively long");
         let expected = r"                                                                    _                _   
                                                                 ___| |__   ___  _ __| |_ 
                                                                / __| '_ \ / _ \| '__| __|
@@ -909,8 +969,9 @@ pub(crate) mod test {
 
     #[test]
     fn forced_line_break_no_space() {
-        let rendered = Renderer::new(&Font::standard())
-            .render("floccinaucinihilipilification", 80)
+        let rendered: String = Renderer::new(&Font::standard())
+            .max_width(80)
+            .render("floccinaucinihilipilification")
             .unwrap();
 
         let expected = r"  __ _                _                        _       _ _     _ _ _       _ _ 
@@ -927,8 +988,9 @@ pub(crate) mod test {
 
     #[test]
     fn forced_line_break_lots_of_spaces() {
-        let rendered = Renderer::new(&Font::standard())
-            .render("floccinauci                  nihilipilification", 80)
+        let rendered: String = Renderer::new(&Font::standard())
+            .max_width(80)
+            .render("floccinauci                  nihilipilification")
             .unwrap();
         let expected = r"  __ _                _                        _                   
  / _| | ___   ___ ___(_)_ __   __ _ _   _  ___(_)                  
@@ -949,8 +1011,9 @@ pub(crate) mod test {
         use letrs_fonts::FontFile;
 
         let font_mini = Font::built_in(FontFile::Mini);
-        let rendered = Renderer::new(&font_mini)
-            .render("The quick brown fox jumps over the lazy dog.", 80)
+        let rendered: String = Renderer::new(&font_mini)
+            .max_width(80)
+            .render("The quick brown fox jumps over the lazy dog.")
             .unwrap();
         let expected = r"___                                   _                                
  ||_  _   _.   o _|  |_ .__     ._  _|__     o   ._ _ ._  _  _    _ ._ 

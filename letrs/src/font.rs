@@ -131,7 +131,7 @@ impl Font {
     /// Renders a string with default settings provided by the font and no `max_width`.
     #[must_use]
     pub fn render(&self, string: &str) -> String {
-        Renderer::new(self).render_unbounded(string)
+        Renderer::new(self).render(string)
     }
 
     /// The *comments* portion of the FIGfont, between the header and the FIGcharacters. Usually

@@ -15,8 +15,7 @@
 //! ```
 //! # use letrs::font::Font;
 //! # use letrs::render::{Renderer};
-//! let font = Font::standard();
-//! let rendered = Renderer::new(&font).render_unbounded("Hello, world!");
+//! let rendered = Font::standard().render("Hello, world!");
 //! let expected = concat!(
 //! r" _   _      _ _                             _     _ _ ", "\n",
 //! r"| | | | ___| | | ___    __      _____  _ __| | __| | |", "\n",

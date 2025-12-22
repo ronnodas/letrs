@@ -10,23 +10,22 @@ use std::fs;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use letrs::font::{Font, FontFile, PrintDirection};
-use letrs::render::{self, Renderer};
+use letrs::render::{self, Bounded, Renderer};
 use print_bytes::println_lossy;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let (font, warnings) = cli.font()?;
-    let renderer = cli.renderer(&font);
     let success = if cli.raw_output {
-        renderer
-            .render_bytes(&cli.input, cli.width)
+        cli.renderer(&font)
+            .render::<Vec<u8>>(&cli.input)
             .is_some_and(|output| {
                 println_lossy(&output);
                 true
             })
     } else {
-        renderer
-            .render(&cli.input, cli.width)
+        cli.renderer(&font)
+            .render::<String>(&cli.input)
             .is_some_and(|output| {
                 println!("{output}");
                 true
@@ -85,8 +84,10 @@ impl Cli {
         Ok(result)
     }
 
-    fn renderer<'font>(&self, font: &'font Font) -> Renderer<'font> {
-        let mut renderer = Renderer::new(font).alignment(self.alignment.into());
+    fn renderer<'font>(&self, font: &'font Font) -> Renderer<'font, Bounded> {
+        let mut renderer = Renderer::new(font)
+            .alignment(self.alignment.into())
+            .max_width(self.width);
         if let Some(direction) = self.direction {
             renderer = renderer.print_direction(direction.into());
         }
