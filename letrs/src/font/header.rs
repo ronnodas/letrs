@@ -132,10 +132,14 @@ impl Header {
 
 /// Printing direction, left-to-right or right-to-left
 ///
-/// Each font specifies a default, found in `font.header().print_direction`. This also affects the
-/// meaning of [`Alignment`](crate::render::Alignment).
+/// Fonts can specify a preferred direction, defaulting to
+/// [`LeftToRight`](PrintDirection::LeftToRight). This is stored in [`Header::print_direction`] and
+/// can be overridden when rendering, with
+/// [`Renderer::print_direction`](crate::render::Renderer::print_direction). As a rendering
+/// parameter, this also affects the meaning of [`Alignment`](crate::render::Alignment).
 ///
-/// The rendered string should always be interpreted left-to-right.
+/// Rendered output is meant to be displayed directly, so should always be interpreted
+/// left-to-right.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrintDirection {
     /// Left-to-right

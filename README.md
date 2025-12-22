@@ -5,7 +5,7 @@ Rust crates for parsing FIGfonts and rendering text using these fonts.
 ## Features
 
 - Horizontal kerning/fitting and smushing
-- Vertical fitting and smushing
+- Vertical fitting and smushing (seems no other rust implementation supports this!)
 - Alignment for multi-line output
 - Automatic line breaking depending on maximum width
 - CLI tool: `cargo install letrs-cli`, then run `letrs input` (assuming you have cargo installed)
@@ -20,7 +20,7 @@ Rust crates for parsing FIGfonts and rendering text using these fonts.
 
 ## Non-features
 
-- Perfectly matching figlet output
+- Perfectly matching `figlet` output
 
 ## Usage
 
@@ -54,5 +54,4 @@ assert_eq!(rendered, expected);
 
 ## Acknowledgements
 
-Thanks to the [pyfiglet](https://github.com/pwaller/pyfiglet) project for organizing the fonts and
-their licenses.
+Thanks to the [pyfiglet](https://github.com/pwaller/pyfiglet) project for organizing the fonts and their licenses.

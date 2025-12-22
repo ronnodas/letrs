@@ -417,8 +417,8 @@ impl<'font> Renderer<'font> {
 /// text on the left if printing left-to-right and on the right if printing right-to-left (and the
 /// opposite for [`Alignment::End`]).
 ///
-/// The alignment only relevant if a maximum width is set or when rendering text with line breaking
-/// characters (newline, carriage return, vertical tab, and form feed).
+/// The alignment is only relevant if a maximum width is set or when rendering text with line
+/// breaking characters (newline, carriage return, vertical tab, and form feed).
 ///
 /// The default is [`Alignment::Start`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
