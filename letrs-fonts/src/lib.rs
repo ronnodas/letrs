@@ -1,4 +1,4 @@
-//! Collection of `.flf` fonts to be used by the `letrs` crate.
+//! Collection of `.flf` fonts to be used by the [`letrs`](https://crates.io/crates/letrs) crate.
 
 macro_rules! fonts {
     ($($name:ident => $file_name:expr,)*) => {

@@ -1,6 +1,7 @@
 # letrs
 
-A command line interface for the `letrs` crate, to directly render text using FIGfonts.
+A command line interface for the [`letrs`](https://crates.io/crates/letrs) crate, to directly render
+text using FIGfonts.
 
 ## Usage
 

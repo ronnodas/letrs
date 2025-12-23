@@ -1,6 +1,6 @@
 #![allow(clippy::print_stdout, reason = "cli output")]
 
-//! CLI for the `letrs` library
+//! CLI for the [`letrs`](https://crates.io/crates/letrs) library
 //!
 //! Run as `letrs input` for default settings or use `letrs --help` to see options.
 
