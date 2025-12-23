@@ -50,7 +50,10 @@ fn main() -> Result<()> {
 #[command(version, about)]
 struct Cli {
     input: String,
-    #[arg(short = 'f', help = "[default: standard]")]
+    #[arg(
+        short = 'f',
+        help = "Name of a built-in font, or the path to a font file [default: standard]"
+    )]
     font: Option<String>,
     #[arg(short = 'w', default_value_t = 80)]
     width: usize,
