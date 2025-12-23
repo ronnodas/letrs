@@ -2,6 +2,11 @@
 name = "letrs-fonts"
 version = "0.1.0"
 edition = "2024"
+license-file = "LICENSE"
+description = "A collection of FIGlet fonts"
+repository = "https://github.com/ronnodas/letrs"
+keywords = ["figlet", "ascii", "asciiart", "font"]
+
 
 [dependencies]
 

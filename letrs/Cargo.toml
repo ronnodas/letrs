@@ -3,6 +3,12 @@ name = "letrs"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+license = "MIT"
+description = "Parse and render with FIGlet fonts"
+readme = "README.md"
+repository = "https://github.com/ronnodas/letrs"
+keywords = ["figlet", "ascii", "asciiart"]
+
 
 [dependencies]
 bstr = "1.0.0"

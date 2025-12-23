@@ -2,6 +2,13 @@
 name = "letrs-cli"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Command-line application to render with FIGlet fonts"
+readme = "README.md"
+repository = "https://github.com/ronnodas/letrs"
+keywords = ["figlet", "ascii", "asciiart", "cli"]
+categories = ["command-line-utilities"]
+
 
 [[bin]]
 name = "letrs"
