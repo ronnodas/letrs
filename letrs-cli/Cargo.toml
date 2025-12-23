@@ -7,7 +7,7 @@ description = "Command-line application to render text with FIGlet fonts"
 readme = "README.md"
 repository = "https://github.com/ronnodas/letrs"
 keywords = ["figlet", "ascii", "asciiart", "cli"]
-categories = ["command-line-utilities"]
+categories = ["command-line-utilities", "visualization"]
 
 
 [[bin]]

@@ -8,6 +8,7 @@ description = "Parse and render text with FIGlet fonts"
 readme = "README.md"
 repository = "https://github.com/ronnodas/letrs"
 keywords = ["figlet", "ascii", "asciiart"]
+categories = ["command-line-utilities", "visualization"]
 
 
 [dependencies]
