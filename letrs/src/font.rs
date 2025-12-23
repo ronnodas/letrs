@@ -14,9 +14,9 @@ use thiserror::Error;
 
 use crate::render::{Renderer, Unbounded};
 
+pub use header::{Hardblank, Header, HeaderError, PrintDirection};
 #[cfg(feature = "fonts")]
 pub use letrs_fonts::FontFile;
-pub use header::{Hardblank, Header, HeaderError, PrintDirection};
 
 /// The 102 codepoints for characters that are included in all FIGfonts
 ///
