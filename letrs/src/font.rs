@@ -10,12 +10,12 @@ use std::str;
 
 use bstr::{BString, ByteSlice as _};
 use itertools::Itertools as _;
-#[cfg(feature = "fonts")]
-pub use letrs_fonts::FontFile;
 use thiserror::Error;
 
 use crate::render::{Renderer, Unbounded};
 
+#[cfg(feature = "fonts")]
+pub use letrs_fonts::FontFile;
 pub use header::{Hardblank, Header, HeaderError, PrintDirection};
 
 /// The 102 codepoints for characters that are included in all FIGfonts
