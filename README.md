@@ -10,7 +10,7 @@ Rust crates for parsing FIGfonts and rendering text using these fonts.
 - Automatic line breaking depending on maximum width
 - CLI tool: `cargo install letrs-cli`, then run `letrs input` (assuming you have cargo installed)
 
-## Possible future features
+## Possible future additions
 
 - Control files
 - Performance, both speed and memory usage
@@ -20,7 +20,7 @@ Rust crates for parsing FIGfonts and rendering text using these fonts.
 
 ## Non-features
 
-- Perfectly matching `figlet` output
+- Exactly matching `figlet` output
 
 ## Usage
 
@@ -39,8 +39,7 @@ user@machine:~$ letrs "Hello, world!"
 Calling library functions in rust code:
 
 ```rust
-let font = Font::standard();
-println!(Renderer::new(&font).render_unbounded("Hello, world!"))
+let rendered: String = Font::standard().renderer().render("Hello, world!");
 let expected = concat!(
 r" _   _      _ _                             _     _ _ ", "\n",
 r"| | | | ___| | | ___    __      _____  _ __| | __| | |", "\n",
@@ -52,6 +51,12 @@ r"                    |/                                "
 assert_eq!(rendered, expected);
 ```
 
+## Contributing
+
+Feel free to file an issue or pull request.
+
 ## Acknowledgements
 
-Thanks to the [pyfiglet](https://github.com/pwaller/pyfiglet) project for organizing the fonts and their licenses.
+Thanks to the [pyfiglet](https://github.com/pwaller/pyfiglet) project for organizing the fonts and
+their licenses. Thanks to [Jon Gjengset](https://github.com/jonhoo/) for the CI script collection
+(and just generally excellent rust resources).

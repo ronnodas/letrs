@@ -1,4 +1,4 @@
-//! Collection of `.flf` fonts to be used by `letrs`
+//! Collection of `.flf` fonts to be used by the `letrs` crate.
 
 macro_rules! fonts {
     ($($name:ident => $file_name:expr,)*) => {
@@ -14,10 +14,10 @@ macro_rules! fonts {
         }
 
         impl FontFile {
-            /// An array with all the included font strings
+            /// An array containing all the variants
             pub const ALL: [Self; const{0 $(+ {_ = $file_name; 1} )*}] = [$(Self::$name),*];
 
-            /// Returns the contents of a font file
+            /// The contents of a font file
             #[must_use]
             pub const fn as_bytes(&self) -> &'static [u8] {
                 match self {
@@ -25,7 +25,7 @@ macro_rules! fonts {
                 }
             }
 
-            /// Returns the file stem
+            /// The file stem
             #[must_use]
             pub const fn name(&self) -> &'static str {
                 match self {
@@ -33,7 +33,7 @@ macro_rules! fonts {
                 }
             }
 
-            /// Matches a font name to an included font
+            /// Match a font name to an included font
             #[must_use]
             pub fn from_name(name: &str) -> Option<Self> {
                 match name {

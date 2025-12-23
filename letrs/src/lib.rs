@@ -1,17 +1,16 @@
 //! A crate for parsing FIGfonts and rendering text using these fonts.
 //!
 //! # Features
-//! - Horizontal kerning/fitting and smushing
-//! - Vertical fitting and smushing
-//! - Alignment for multi-line output
-//! - Automatic line breaking depending on maximum width
 //!
-//! # Possible future features
-//! - Control files
-//! - Performance, both speed and memory usage
-//! - TOIlet fonts
+//! - Horizontal kerning/fitting and smushing
+//!   ([`HorizontalSmushing`](crate::render::HorizontalSmushing))
+//! - Vertical fitting and smushing ([`VerticalSmushing`](crate::render::VerticalSmushing))
+//! - Alignment for multi-line output ([`Alignment`](crate::render::Alignment))
+//! - Automatic line breaking depending on maximum width
+//!   ([`Renderer::render`](crate::render::Renderer::render))
 //!
 //! # Example
+//!
 //! ```
 //! # use letrs::font::Font;
 //! # use letrs::render::{Renderer};
@@ -26,6 +25,12 @@
 //! );
 //! assert_eq!(rendered, expected);
 //! ```
+//!
+//! ## Feature flags
+//!
+//! - `fonts` (default): adds the few dozen "standard" FIGfonts in the
+//!   [`letrs-fonts`](https://crates.io/crates/letrs-fonts) package (via a dependency), which can be
+//!   loaded using [`Font::built_in()`](crate::font::Font::built_in)
 
 pub mod font;
 pub mod render;

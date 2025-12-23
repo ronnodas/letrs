@@ -16,7 +16,7 @@ use print_bytes::println_lossy;
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let (font, warnings) = cli.font()?;
-    let success = if cli.raw_output {
+    let success = if cli.binary_output {
         cli.renderer(&font)
             .render::<Vec<u8>>(&cli.input)
             .is_some_and(|output| {
@@ -47,9 +47,10 @@ fn main() -> Result<()> {
 }
 
 #[derive(Debug, Parser)]
+#[command(version, about)]
 struct Cli {
     input: String,
-    #[arg(short = 'f')]
+    #[arg(short = 'f', help = "[default: standard]")]
     font: Option<String>,
     #[arg(short = 'w', default_value_t = 80)]
     width: usize,
@@ -61,8 +62,11 @@ struct Cli {
     horizontal_mode: Option<LayoutMode>,
     #[arg(short = 'v')]
     vertical_mode: Option<LayoutMode>,
-    #[arg(short = 'r')]
-    raw_output: bool,
+    #[arg(
+        short = 'b',
+        help = "Print binary output directly, without replacing non-UTF-8 characters"
+    )]
+    binary_output: bool,
 }
 
 impl Cli {
